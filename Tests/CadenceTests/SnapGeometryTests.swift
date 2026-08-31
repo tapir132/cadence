@@ -41,4 +41,27 @@ struct SnapGeometryTests {
         #expect(FloatingClickAction(clickCount: 2) == .open)
         #expect(FloatingClickAction(clickCount: 3) == .ignore)
     }
+
+    @Test func dragReleaseLatchCanRearmForEveryDrag() {
+        var latch = DragReleaseLatch()
+
+        latch.begin(mouseUpCounter: 40)
+        #expect(latch.isDragging)
+        #expect(!latch.releaseDetected(buttonIsDown: true, mouseUpCounter: 40))
+        #expect(latch.releaseDetected(buttonIsDown: false, mouseUpCounter: 41))
+        latch.end()
+        #expect(!latch.isDragging)
+
+        latch.begin(mouseUpCounter: 41)
+        #expect(latch.isDragging)
+        #expect(!latch.releaseDetected(buttonIsDown: true, mouseUpCounter: 41))
+        #expect(latch.releaseDetected(buttonIsDown: true, mouseUpCounter: 42))
+        latch.end()
+
+        // Re-beginning also recovers from a stale drag that never observed release.
+        latch.begin(mouseUpCounter: 42)
+        latch.begin(mouseUpCounter: 99)
+        #expect(!latch.releaseDetected(buttonIsDown: true, mouseUpCounter: 99))
+        #expect(latch.releaseDetected(buttonIsDown: false, mouseUpCounter: 99))
+    }
 }
