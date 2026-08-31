@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Cadence
 
@@ -40,6 +41,104 @@ struct SnapGeometryTests {
         #expect(FloatingClickAction(clickCount: 1) == .drag)
         #expect(FloatingClickAction(clickCount: 2) == .open)
         #expect(FloatingClickAction(clickCount: 3) == .ignore)
+    }
+
+    @MainActor
+    @Test func idleControlCollapsesTowardItsConfiguredEdge() {
+        #expect(mode(placement: .top) == .collapsed(.top))
+        #expect(mode(placement: .right) == .collapsed(.right))
+        #expect(mode(placement: .bottom) == .collapsed(.bottom))
+        #expect(mode(placement: .left) == .collapsed(.left))
+    }
+
+    @MainActor
+    @Test func freeControlCollapsesTowardItsNearestEdge() {
+        #expect(mode(placement: .free, x: 0.5, y: 0.98) == .collapsed(.top))
+        #expect(mode(placement: .free, x: 0.98, y: 0.5) == .collapsed(.right))
+        #expect(mode(placement: .free, x: 0.5, y: 0.02) == .collapsed(.bottom))
+        #expect(mode(placement: .free, x: 0.02, y: 0.5) == .collapsed(.left))
+    }
+
+    @MainActor
+    @Test func hoverDragAndListeningKeepTheControlExpanded() {
+        #expect(mode(isHovered: true) == .idle)
+        #expect(mode(isDragging: true) == .idle)
+        #expect(mode(isListening: true) == .listening)
+    }
+
+    @MainActor
+    @Test func appKitTrackingEventsReachTheHoverCallback() throws {
+        let view = FloatingInteractionView(rootView: EmptyView())
+        var hoverStates: [Bool] = []
+        view.onHoverChanged = { hoverStates.append($0) }
+        let entered = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            trackingNumber: 1,
+            userData: nil
+        ))
+        let exited = try #require(NSEvent.enterExitEvent(
+            with: .mouseExited,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 2,
+            trackingNumber: 1,
+            userData: nil
+        ))
+
+        view.mouseEntered(with: entered)
+        view.mouseExited(with: exited)
+
+        #expect(hoverStates == [true, false])
+    }
+
+    @MainActor
+    @Test func completeFrameAnimationMovesARealPanel() async {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 40, y: 40, width: 18, height: 58),
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let target = NSRect(x: 40, y: 40, width: 56, height: 56)
+
+        await withCheckedContinuation { continuation in
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.01
+                panel.animator().setFrame(target, display: true)
+            } completionHandler: {
+                continuation.resume()
+            }
+        }
+
+        #expect(panel.frame == target)
+    }
+
+    @MainActor
+    private func mode(
+        isListening: Bool = false,
+        isHovered: Bool = false,
+        isDragging: Bool = false,
+        placement: BarPlacement = .bottom,
+        x: Double = 0.5,
+        y: Double = 0
+    ) -> FloatingBarMode {
+        FloatingBarPresentation.mode(
+            isListening: isListening,
+            isHovered: isHovered,
+            isDragging: isDragging,
+            placement: placement,
+            freeX: x,
+            freeY: y
+        )
     }
 
 }

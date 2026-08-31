@@ -12,7 +12,8 @@ This makes Cadence useful in editors where revision history, collaboration playb
 - On-device speech recognition when supported by the selected locale
 - Personal dictionary for names, acronyms, and specialized vocabulary
 - Configurable global keyboard shortcut
-- Compact floating logo with eight edge snap points, Command-drag free positioning, and adjustable sizing
+- Edge-aware idle handle that expands on hover or while dictating
+- Eight edge snap points, Command-drag free positioning, and adjustable sizing
 - Adjustable floating-bar size from 65% to 135%
 - Local transcript history and words-per-minute statistics
 - Failed-insertion detection with a non-activating transcript recovery card
@@ -49,7 +50,7 @@ Open **Settings** in Cadence and grant the three required permissions:
 
 Place the cursor in an editor and press the configured shortcut. The default is **Control–Option–Space**. Press it again to finish.
 
-The floating bar can stop or cancel dictation without activating the main Cadence window. Drag the idle logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement. Double-click the logo to open Cadence; a single click never opens the app.
+The floating bar can stop or cancel dictation without activating the main Cadence window. When idle, it collapses into a slim edge-aware handle and expands when hovered. Drag the expanded logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement. Double-click the logo to open Cadence; a single click never opens the app.
 
 ## How incremental dictation works
 

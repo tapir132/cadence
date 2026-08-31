@@ -2,22 +2,95 @@
 @preconcurrency import Combine
 import SwiftUI
 
+enum FloatingDockEdge: Equatable {
+    case top
+    case right
+    case bottom
+    case left
+}
+
+enum FloatingBarMode: Equatable {
+    case collapsed(FloatingDockEdge)
+    case idle
+    case listening
+
+    var baseSize: NSSize {
+        switch self {
+        case .collapsed(.top), .collapsed(.bottom):
+            NSSize(width: 58, height: 18)
+        case .collapsed(.left), .collapsed(.right):
+            NSSize(width: 18, height: 58)
+        case .idle:
+            NSSize(width: 56, height: 56)
+        case .listening:
+            NSSize(width: 430, height: 72)
+        }
+    }
+}
+
+@MainActor
+final class FloatingBarPresentation: ObservableObject {
+    @Published var mode: FloatingBarMode = .idle
+
+    static func mode(
+        isListening: Bool,
+        isHovered: Bool,
+        isDragging: Bool,
+        placement: BarPlacement,
+        freeX: Double,
+        freeY: Double
+    ) -> FloatingBarMode {
+        if isListening { return .listening }
+        if isHovered || isDragging { return .idle }
+
+        let edge: FloatingDockEdge = switch placement {
+        case .top: .top
+        case .right: .right
+        case .bottom: .bottom
+        case .left: .left
+        case .free: nearestEdge(x: freeX, y: freeY)
+        }
+        return .collapsed(edge)
+    }
+
+    private static func nearestEdge(x: Double, y: Double) -> FloatingDockEdge {
+        let normalizedX = min(max(x, 0), 1)
+        let normalizedY = min(max(y, 0), 1)
+        let candidates: [(FloatingDockEdge, Double)] = [
+            (.top, 1 - normalizedY),
+            (.bottom, normalizedY),
+            (.left, normalizedX),
+            (.right, 1 - normalizedX)
+        ]
+        return candidates.min { $0.1 < $1.1 }?.0 ?? .bottom
+    }
+}
+
 @MainActor
 final class FloatingPanelController: NSObject, NSWindowDelegate {
-    private static let idleBaseSize = NSSize(width: 56, height: 56)
-    private static let listeningBaseSize = NSSize(width: 430, height: 72)
     private let panel: NSPanel
     private let model: AppModel
+    private let presentation = FloatingBarPresentation()
     private let snapOverlay = SnapTargetsOverlayController()
     private let recoveryOverlay: InsertionRecoveryOverlayController
     private var cancellables = Set<AnyCancellable>()
     private var isTrackingDrag = false
     private var freeDragWasRequested = false
+    private var isPointerInside = false
+    private var collapseTask: Task<Void, Never>?
 
     init(model: AppModel) {
         self.model = model
         recoveryOverlay = InsertionRecoveryOverlayController(model: model)
-        let size = Self.scaledSize(for: model)
+        presentation.mode = FloatingBarPresentation.mode(
+            isListening: model.isListening,
+            isHovered: false,
+            isDragging: false,
+            placement: model.barPlacement,
+            freeX: model.freeBarX,
+            freeY: model.freeBarY
+        )
+        let size = Self.scaledSize(for: model, mode: presentation.mode)
         panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.nonactivatingPanel, .borderless],
@@ -33,10 +106,13 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
         panel.delegate = self
-        let interactionView = FloatingInteractionView(rootView: FloatingBar().environmentObject(model))
+        let interactionView = FloatingInteractionView(
+            rootView: FloatingBar(presentation: presentation).environmentObject(model)
+        )
         interactionView.shouldCaptureMouse = { [weak model] in model?.isListening == false }
         interactionView.onSingleMouseDown = { [weak self] event in self?.beginTrackedDrag(with: event) }
         interactionView.onDoubleClick = { [weak self] in self?.openMainApp() }
+        interactionView.onHoverChanged = { [weak self] isHovered in self?.setHovered(isHovered) }
         panel.contentView = interactionView
 
         position(animated: false)
@@ -52,12 +128,12 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private func observePreferences() {
         model.$barPlacement
             .dropFirst()
-            .sink { [weak self] placement in self?.position(animated: true, placement: placement) }
+            .sink { [weak self] placement in self?.refreshPresentation(animated: true, placement: placement) }
             .store(in: &cancellables)
 
         model.$barScale
             .dropFirst()
-            .sink { [weak self] scale in self?.position(animated: true, scale: scale) }
+            .sink { [weak self] scale in self?.refreshPresentation(animated: true, scale: scale) }
             .store(in: &cancellables)
 
         model.$state
@@ -65,7 +141,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] isListening in
-                self?.position(animated: true, isListening: isListening)
+                self?.refreshPresentation(animated: true, isListening: isListening)
             }
             .store(in: &cancellables)
 
@@ -86,12 +162,13 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         animated: Bool,
         placement placementOverride: BarPlacement? = nil,
         scale scaleOverride: Double? = nil,
-        isListening listeningOverride: Bool? = nil
+        mode modeOverride: FloatingBarMode? = nil
     ) {
         guard let screen = activeScreen else { return }
         let visible = screen.visibleFrame
         let placement = placementOverride ?? model.barPlacement
-        let size = Self.scaledSize(for: model, scale: scaleOverride, isListening: listeningOverride)
+        let mode = modeOverride ?? presentation.mode
+        let size = Self.scaledSize(for: model, scale: scaleOverride, mode: mode)
         let margin = placement == .bottom ? 1.0 : 8.0
         let origin: NSPoint
 
@@ -114,10 +191,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         }
 
         let frame = NSRect(origin: SnapGeometry.clamped(origin, size: size, in: visible), size: size)
-        if animated {
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.24
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().setFrame(frame, display: true)
             }
         } else {
@@ -125,11 +202,58 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func refreshPresentation(
+        animated: Bool,
+        placement placementOverride: BarPlacement? = nil,
+        scale scaleOverride: Double? = nil,
+        isListening listeningOverride: Bool? = nil
+    ) {
+        let placement = placementOverride ?? model.barPlacement
+        let isListening = listeningOverride ?? model.isListening
+        let mode = FloatingBarPresentation.mode(
+            isListening: isListening,
+            isHovered: isPointerInside,
+            isDragging: isTrackingDrag,
+            placement: placement,
+            freeX: model.freeBarX,
+            freeY: model.freeBarY
+        )
+        presentation.mode = mode
+        position(animated: animated, placement: placement, scale: scaleOverride, mode: mode)
+    }
+
+    private func setHovered(_ isHovered: Bool) {
+        isPointerInside = isHovered
+        collapseTask?.cancel()
+        collapseTask = nil
+
+        if isHovered {
+            refreshPresentation(animated: true)
+        } else {
+            scheduleCollapse(after: .milliseconds(220))
+        }
+    }
+
+    private func scheduleCollapse(after delay: Duration) {
+        collapseTask?.cancel()
+        collapseTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            let pointerIsInside = NSMouseInRect(NSEvent.mouseLocation, panel.frame, false)
+            isPointerInside = pointerIsInside
+            guard !pointerIsInside, !isTrackingDrag, !model.isListening else { return }
+            refreshPresentation(animated: true)
+        }
+    }
+
     private func beginTrackedDrag(with event: NSEvent) {
         guard !model.isListening else { return }
-        isTrackingDrag = true
-        freeDragWasRequested = event.modifierFlags.contains(.command)
         let startingMouse = panel.convertPoint(toScreen: event.locationInWindow)
+        isTrackingDrag = true
+        collapseTask?.cancel()
+        collapseTask = nil
+        refreshPresentation(animated: false)
+        freeDragWasRequested = event.modifierFlags.contains(.command)
         let startingOrigin = panel.frame.origin
         updateSnapPreview()
 
@@ -180,7 +304,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             let slot = SnapGeometry.nearestSlot(to: panel.frame.origin, size: panel.frame.size, in: visible)
             target = SnapGeometry.origin(for: slot, size: panel.frame.size, in: visible)
         }
-        if panel.frame.origin != target {
+        if panel.frame.origin != target, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.2
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -189,6 +313,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             }
         }
         saveFreePosition(target, in: visible)
+        scheduleCollapse(after: .milliseconds(320))
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -222,10 +347,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private static func scaledSize(
         for model: AppModel,
         scale scaleOverride: Double? = nil,
-        isListening listeningOverride: Bool? = nil
+        mode: FloatingBarMode
     ) -> NSSize {
         let scale = scaleOverride ?? model.barScale
-        let base = (listeningOverride ?? model.isListening) ? listeningBaseSize : idleBaseSize
+        let base = mode.baseSize
         return NSSize(width: base.width * scale, height: base.height * scale)
     }
 
@@ -333,12 +458,14 @@ private struct InsertionRecoveryCard: View {
 }
 
 @MainActor
-private final class FloatingInteractionView<Content: View>: NSView {
+final class FloatingInteractionView<Content: View>: NSView {
     var shouldCaptureMouse: () -> Bool = { true }
     var onSingleMouseDown: ((NSEvent) -> Void)?
     var onDoubleClick: (() -> Void)?
+    var onHoverChanged: ((Bool) -> Void)?
 
     private let hostingView: NSHostingView<Content>
+    private var hoverTrackingArea: NSTrackingArea?
 
     init(rootView: Content) {
         hostingView = NSHostingView(rootView: rootView)
@@ -353,11 +480,32 @@ private final class FloatingInteractionView<Content: View>: NSView {
         hostingView.frame = bounds
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         shouldCaptureMouse() ? self : super.hitTest(point)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChanged?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHoverChanged?(false)
+    }
 
     override func mouseDown(with event: NSEvent) {
         switch FloatingClickAction(clickCount: event.clickCount) {
@@ -524,62 +672,99 @@ private struct SnapTargetsView: View {
 
 struct FloatingBar: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject var presentation: FloatingBarPresentation
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 10) {
-            if model.isListening {
-                Button { model.cancelDictation() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(Color.white.opacity(0.28)))
-                }
-                .buttonStyle(.plain)
-
-                WaveformMark(level: model.audioLevel, bars: 7)
-
-                Text(model.liveText.isEmpty ? "Listening…" : model.liveText)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(model.liveText.isEmpty ? Color.white.opacity(0.48) : CadenceTheme.cream)
-                    .lineLimit(1)
-                    .frame(maxWidth: 215, alignment: .leading)
-                    .contentTransition(.numericText())
-
-                Button { model.stopDictation() } label: {
-                    Image(systemName: model.state == .finishing ? "ellipsis" : "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(CadenceTheme.ink)
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(CadenceTheme.cream))
-                }
-                .buttonStyle(.plain)
-            } else {
-                BrandMark(size: 34)
-                    .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
-                    .help("Drag to move · Double-click to open Cadence")
+        Group {
+            switch presentation.mode {
+            case .listening:
+                listeningBar
+            case .idle:
+                idleLogo
+            case let .collapsed(edge):
+                collapsedHandle(edge: edge)
             }
         }
-        .padding(.horizontal, model.isListening ? 9 : 10)
-        .frame(width: model.isListening ? 408 : 42, height: model.isListening ? 48 : 42)
-        .background(
-            Group {
-                if model.isListening {
-                    Capsule()
-                        .fill(CadenceTheme.ink.opacity(0.97))
-                        .overlay(Capsule().stroke(Color(red: 0.3, green: 0.29, blue: 0.26), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.24), radius: 16, y: 7)
-                }
-            }
-        )
-        .frame(width: model.isListening ? 430 : 56, height: model.isListening ? 72 : 56)
         .scaleEffect(model.barScale)
         .frame(
-            width: (model.isListening ? 430 : 56) * model.barScale,
-            height: (model.isListening ? 72 : 56) * model.barScale
+            width: presentation.mode.baseSize.width * model.barScale,
+            height: presentation.mode.baseSize.height * model.barScale
         )
         .contentShape(Rectangle())
-        .animation(.spring(response: 0.34, dampingFraction: 0.84), value: model.isListening)
-        .animation(.easeOut(duration: 0.18), value: model.barScale)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: presentation.mode)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.barScale)
     }
 
+    private var listeningBar: some View {
+        HStack(spacing: 10) {
+            Button { model.cancelDictation() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.white.opacity(0.28)))
+            }
+            .buttonStyle(.plain)
+
+            WaveformMark(level: model.audioLevel, bars: 7)
+
+            Text(model.liveText.isEmpty ? "Listening…" : model.liveText)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(model.liveText.isEmpty ? Color.white.opacity(0.48) : CadenceTheme.cream)
+                .lineLimit(1)
+                .frame(maxWidth: 215, alignment: .leading)
+                .contentTransition(.numericText())
+
+            Button { model.stopDictation() } label: {
+                Image(systemName: model.state == .finishing ? "ellipsis" : "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(CadenceTheme.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(CadenceTheme.cream))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 9)
+        .frame(width: 408, height: 48)
+        .background(
+            Capsule()
+                .fill(CadenceTheme.ink.opacity(0.97))
+                .overlay(Capsule().stroke(Color(red: 0.3, green: 0.29, blue: 0.26), lineWidth: 1))
+                .shadow(color: .black.opacity(0.24), radius: 16, y: 7)
+        )
+        .frame(width: 430, height: 72)
+    }
+
+    private var idleLogo: some View {
+        BrandMark(size: 34)
+            .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+            .help("Drag to move · Double-click to open Cadence")
+            .frame(width: 56, height: 56)
+    }
+
+    private func collapsedHandle(edge: FloatingDockEdge) -> some View {
+        ZStack(alignment: alignment(for: edge)) {
+            Color.clear
+            Capsule()
+                .fill(Color(nsColor: .secondaryLabelColor).opacity(0.72))
+                .overlay(Capsule().stroke(Color.white.opacity(0.55), lineWidth: 1))
+                .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+                .frame(
+                    width: edge == .left || edge == .right ? 11 : 48,
+                    height: edge == .left || edge == .right ? 48 : 11
+                )
+        }
+        .frame(width: presentation.mode.baseSize.width, height: presentation.mode.baseSize.height)
+        .help("Hover to reveal Cadence · Drag to move")
+        .accessibilityLabel("Cadence dictation control")
+    }
+
+    private func alignment(for edge: FloatingDockEdge) -> Alignment {
+        switch edge {
+        case .top: .top
+        case .right: .trailing
+        case .bottom: .bottom
+        case .left: .leading
+        }
+    }
 }
