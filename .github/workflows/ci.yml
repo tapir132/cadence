@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test
+      - name: Build and verify app bundle
+        run: |
+          ./scripts/build-app.sh
+          plutil -lint dist/Cadence.app/Contents/Info.plist
+          codesign --verify --deep --strict --verbose=2 dist/Cadence.app

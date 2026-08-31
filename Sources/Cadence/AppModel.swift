@@ -30,10 +30,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var microphoneAuthorized = false
     @Published private(set) var speechAuthorized = false
     @Published private(set) var accessibilityAuthorized = false
+    @Published private(set) var isRequestingPermissions = false
+    @Published private(set) var permissionRequestMessage: String?
     @Published var selectedSection: SidebarSection = .home
     @Published var dictionary: [String] = [] { didSet { persistDictionary() } }
     @Published var useOnDeviceRecognition = true
-    @Published var characterDelayMilliseconds = 7.0 {
+    @Published var shortcut: ShortcutBinding = .standard { didSet { saveSettings() } }
+    @Published var barPlacement: BarPlacement = .bottom { didSet { saveSettings() } }
+    @Published var barScale = 0.85 { didSet { saveSettings() } }
+    @Published private(set) var freeBarX = 0.5
+    @Published private(set) var freeBarY = 0.0
+    @Published var characterDelayMilliseconds = 4.0 {
         didSet { injector.characterDelayMilliseconds = characterDelayMilliseconds }
     }
 
@@ -57,8 +64,24 @@ final class AppModel: ObservableObject {
     private init() {
         records = Self.loadRecords()
         dictionary = UserDefaults.standard.stringArray(forKey: "customDictionary") ?? ["Cadence", "macOS", "SwiftUI"]
-        characterDelayMilliseconds = UserDefaults.standard.object(forKey: "characterDelay") as? Double ?? 7
+        characterDelayMilliseconds = UserDefaults.standard.object(forKey: "characterDelay") as? Double ?? 4
         useOnDeviceRecognition = UserDefaults.standard.object(forKey: "onDevice") as? Bool ?? true
+        if let data = UserDefaults.standard.data(forKey: "shortcut"),
+           let saved = try? JSONDecoder().decode(ShortcutBinding.self, from: data) {
+            shortcut = saved
+        }
+        if let raw = UserDefaults.standard.string(forKey: "barPlacement"), let saved = BarPlacement(rawValue: raw) {
+            barPlacement = saved
+        }
+        barScale = UserDefaults.standard.object(forKey: "barScale") as? Double ?? 0.85
+        freeBarX = UserDefaults.standard.object(forKey: "freeBarX") as? Double ?? 0.5
+        freeBarY = UserDefaults.standard.object(forKey: "freeBarY") as? Double ?? 0
+        if UserDefaults.standard.integer(forKey: "floatingBarDesignVersion") < 2 {
+            barPlacement = .bottom
+            barScale = 0.85
+            freeBarY = 0
+            UserDefaults.standard.set(2, forKey: "floatingBarDesignVersion")
+        }
         injector.characterDelayMilliseconds = characterDelayMilliseconds
     }
 
@@ -147,10 +170,17 @@ final class AppModel: ObservableObject {
     }
 
     func requestPermissions() {
+        guard !isRequestingPermissions else { return }
+        isRequestingPermissions = true
+        permissionRequestMessage = nil
         Task {
             _ = await AppleSpeechEngine.requestPermissions()
             refreshPermissions()
-            requestAccessibilityPermission()
+            if !accessibilityAuthorized { requestAccessibilityPermission() }
+            isRequestingPermissions = false
+            if !microphoneAuthorized || !speechAuthorized {
+                permissionRequestMessage = "If access was previously denied, enable Cadence in System Settings → Privacy & Security."
+            }
         }
     }
 
@@ -194,6 +224,22 @@ final class AppModel: ObservableObject {
     func saveSettings() {
         UserDefaults.standard.set(characterDelayMilliseconds, forKey: "characterDelay")
         UserDefaults.standard.set(useOnDeviceRecognition, forKey: "onDevice")
+        if let data = try? JSONEncoder().encode(shortcut) { UserDefaults.standard.set(data, forKey: "shortcut") }
+        UserDefaults.standard.set(barPlacement.rawValue, forKey: "barPlacement")
+        UserDefaults.standard.set(barScale, forKey: "barScale")
+    }
+
+    func saveFreeBarPosition(x: Double, y: Double) {
+        freeBarX = min(max(x, 0), 1)
+        freeBarY = min(max(y, 0), 1)
+        UserDefaults.standard.set(freeBarX, forKey: "freeBarX")
+        UserDefaults.standard.set(freeBarY, forKey: "freeBarY")
+    }
+
+    func resetBarPosition() {
+        saveFreeBarPosition(x: 0.5, y: 0)
+        barPlacement = .bottom
+        barScale = 0.85
     }
 
     private var isError: Bool { if case .error = state { return true }; return false }

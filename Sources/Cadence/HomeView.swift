@@ -87,11 +87,6 @@ struct HomeView: View {
             divider
             metric(value: "\(model.records.count)", label: "dictations")
             Spacer()
-            HStack(spacing: 7) {
-                Circle().fill(CadenceTheme.lime).frame(width: 7, height: 7)
-                Text("ON-DEVICE FIRST")
-                    .font(.system(size: 9, weight: .bold)).tracking(1.1)
-            }
         }
         .padding(.horizontal, 22)
         .frame(height: 84)

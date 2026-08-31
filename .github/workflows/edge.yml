@@ -1,0 +1,64 @@
+name: Publish Edge Build
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cadence-edge
+  cancel-in-progress: true
+
+jobs:
+  edge:
+    runs-on: macos-15
+    env:
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: swift test
+
+      - name: Configure edge version
+        run: |
+          build="$(git show -s --format=%ct HEAD)"
+          short_sha="${GITHUB_SHA:0:7}"
+          base_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $base_version-edge.$short_sha" Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" Resources/Info.plist
+
+      - name: Build Cadence
+        run: ./scripts/build-app.sh
+
+      - name: Create signed Edge appcast
+        run: |
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent dist/Cadence.app release/Cadence-edge.zip
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | \
+            .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+              --ed-key-file - \
+              --download-url-prefix "https://github.com/tapir132/whisper-live/releases/download/edge/" \
+              --maximum-versions 1 \
+              --maximum-deltas 0 \
+              -o appcast.xml \
+              release
+
+      - name: Publish rolling Edge prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view edge --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create edge \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Cadence Edge" \
+              --notes "Rolling developer build from main. This asset is replaced after every successful commit." \
+              --prerelease
+          fi
+          gh release upload edge \
+            release/Cadence-edge.zip \
+            release/appcast.xml \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

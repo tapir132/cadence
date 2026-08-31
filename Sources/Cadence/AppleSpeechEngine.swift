@@ -31,7 +31,10 @@ final class AppleSpeechEngine {
     static var microphoneAuthorized: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
     static var speechAuthorized: Bool { SFSpeechRecognizer.authorizationStatus() == .authorized }
 
-    static func requestPermissions() async -> Bool {
+    /// Speech invokes its authorization callback on an arbitrary queue. This
+    /// method must remain nonisolated so Swift does not attach a main-actor
+    /// executor precondition to that system-owned callback.
+    nonisolated static func requestPermissions() async -> Bool {
         let microphone = await AVCaptureDevice.requestAccess(for: .audio)
         let speech = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }

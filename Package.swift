@@ -7,9 +7,15 @@ let package = Package(
     products: [
         .executable(name: "Cadence", targets: ["Cadence"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.6")
+    ],
     targets: [
         .executableTarget(
             name: "Cadence",
+            dependencies: [
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/Cadence"
         ),
         .testTarget(

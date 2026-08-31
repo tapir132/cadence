@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var updates = UpdateManager.shared
 
     var body: some View {
         ScrollView {
@@ -25,10 +26,25 @@ struct SettingsView: View {
                 }
                 .settingsSurface()
 
-                Button("Request missing permissions") { model.requestPermissions() }
+                Button {
+                    model.requestPermissions()
+                } label: {
+                    HStack(spacing: 7) {
+                        if model.isRequestingPermissions { ProgressView().controlSize(.small) }
+                        Text(model.isRequestingPermissions ? "Requesting permissions…" : "Request missing permissions")
+                    }
+                }
                     .buttonStyle(.borderedProminent)
                     .tint(CadenceTheme.ink)
+                    .disabled(model.isRequestingPermissions)
                     .padding(.top, 12)
+
+                if let message = model.permissionRequestMessage {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(CadenceTheme.muted)
+                        .padding(.top, 8)
+                }
 
                 sectionTitle("Recognition").padding(.top, 34)
                 VStack(spacing: 0) {
@@ -54,7 +70,7 @@ struct SettingsView: View {
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(CadenceTheme.muted)
                     }
-                    Slider(value: $model.characterDelayMilliseconds, in: 2...18, step: 1)
+                    Slider(value: $model.characterDelayMilliseconds, in: 1...16, step: 1)
                         .tint(CadenceTheme.ink)
                         .onChange(of: model.characterDelayMilliseconds) { _, _ in model.saveSettings() }
                     Text("Each character is emitted as a keyboard event. Slower spacing creates finer-grained document history.")
@@ -71,13 +87,135 @@ struct SettingsView: View {
                             .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                     }
                     Spacer()
-                    HStack(spacing: 5) {
-                        KeyboardKey(text: "⌃")
-                        KeyboardKey(text: "⌥")
-                        KeyboardKey(text: "Space")
-                    }
+                    ShortcutRecorder(shortcut: $model.shortcut)
+                        .frame(width: 148, height: 32)
                 }
                 .padding(16)
+                .settingsSurface()
+
+                sectionTitle("Floating bar").padding(.top, 34)
+                VStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Screen position").font(.system(size: 13, weight: .semibold))
+                                Text("Drag into one of eight edge slots. Hold Command while dragging for free placement.")
+                                    .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                            }
+                            Spacer()
+                        }
+                        HStack(spacing: 7) {
+                            ForEach(BarPlacement.allCases) { placement in
+                                Button {
+                                    model.barPlacement = placement
+                                } label: {
+                                    VStack(spacing: 5) {
+                                        Image(systemName: placement.icon).font(.system(size: 13, weight: .semibold))
+                                        Text(placement.title).font(.system(size: 9, weight: .semibold))
+                                    }
+                                    .foregroundStyle(model.barPlacement == placement ? CadenceTheme.cream : CadenceTheme.ink.opacity(0.66))
+                                    .frame(maxWidth: .infinity, minHeight: 48)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(model.barPlacement == placement ? CadenceTheme.ink : CadenceTheme.paperDeep.opacity(0.75))
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .padding(16)
+
+                    line
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Bar size").font(.system(size: 13, weight: .semibold))
+                            Spacer()
+                            Text("\(Int(model.barScale * 100))%")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(CadenceTheme.muted)
+                        }
+                        HStack(spacing: 12) {
+                            Image(systemName: "capsule").font(.system(size: 9))
+                            Slider(value: $model.barScale, in: 0.65...1.35, step: 0.05).tint(CadenceTheme.ink)
+                            Image(systemName: "capsule.fill").font(.system(size: 17))
+                        }
+                        HStack {
+                            Text("Resize live; Cadence remembers the size and free position per Mac.")
+                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                            Spacer()
+                            Button("Reset") { model.resetBarPosition() }.buttonStyle(.link)
+                        }
+                    }
+                    .padding(16)
+
+                }
+                .settingsSurface()
+
+                sectionTitle("Updates").padding(.top, 34)
+                VStack(spacing: 0) {
+                    Toggle(isOn: $updates.automaticallyChecks) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Check automatically").font(.system(size: 13, weight: .semibold))
+                            Text("Looks for signed GitHub releases every six hours.")
+                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .padding(16)
+
+                    line
+
+                    Toggle(isOn: $updates.automaticallyDownloads) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Download and install automatically").font(.system(size: 13, weight: .semibold))
+                            Text("Sparkle verifies the EdDSA signature before replacing Cadence.")
+                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .disabled(!updates.automaticallyChecks)
+                    .padding(16)
+
+                    line
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Cadence \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")")
+                                .font(.system(size: 13, weight: .semibold))
+                            Text("Updates are served from tapir132/whisper-live.")
+                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        }
+                        Spacer()
+                        Button("Check now") { updates.checkForUpdates() }
+                            .buttonStyle(.bordered)
+                            .disabled(!updates.canCheckForUpdates)
+                    }
+                    .padding(16)
+
+                    line
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Developer update channel").font(.system(size: 13, weight: .semibold))
+                            Text(updates.channel == .stable
+                                 ? "Stable installs intentional GitHub Releases only."
+                                 : "Edge installs every successful build from main and may be unstable.")
+                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        }
+                        Spacer()
+                        Picker("Update channel", selection: $updates.channel) {
+                            ForEach(UpdateChannel.allCases) { channel in
+                                Text(channel.title).tag(channel)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 150)
+                    }
+                    .padding(16)
+                }
                 .settingsSurface()
             }
             .padding(42)

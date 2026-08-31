@@ -1,43 +1,105 @@
 # Cadence
 
-Cadence is a native macOS dictation app that types into the focused application continuously instead of pasting one large transcript when recording ends.
+Cadence is a native macOS dictation app that writes into the focused application as you speak. Instead of waiting for an entire recording and pasting one large block, Cadence commits stable words incrementally as keyboard events.
 
-The first build is intentionally optimized for the Mac in this workspace: Apple Silicon running macOS 15. It uses `AVAudioEngine`, Apple's Speech framework, SwiftUI/AppKit, and accessibility-approved keyboard events. Audio is not saved. Transcript history stays in local `UserDefaults`.
+This makes Cadence useful in editors where revision history, collaboration playback, or natural typing behavior matters.
 
-## Run it
+## Features
+
+- Live, low-latency dictation in any macOS text field
+- Character-level keyboard injection rather than a final bulk paste
+- Append-only transcript stabilization that avoids rewriting committed words
+- On-device speech recognition when supported by the selected locale
+- Personal dictionary for names, acronyms, and specialized vocabulary
+- Configurable global keyboard shortcut
+- Compact floating logo with eight edge snap points, Command-drag free positioning, and adjustable sizing
+- Adjustable floating-bar size from 70% to 150%
+- Local transcript history and words-per-minute statistics
+- Signed automatic updates through Sparkle and GitHub Releases
+- Native SwiftUI and AppKit interface
+
+## Requirements
+
+- macOS 14 or later
+- Microphone access
+- Speech Recognition access
+- Accessibility access for typing into other applications
+
+The current release build is optimized for Apple Silicon. The speech engine uses Apple's Speech framework, so recognition availability and on-device language support depend on macOS.
+
+## Build and run
+
+Clone the repository, then run:
 
 ```sh
 ./scripts/build-app.sh
 open dist/Cadence.app
 ```
 
-On first launch, open **Settings** in Cadence and grant:
+The build uses Swift Package Manager and produces an ad-hoc-signed application bundle at `dist/Cadence.app`. A full Xcode installation is not required; current Command Line Tools are sufficient.
+
+## First launch
+
+Open **Settings** in Cadence and grant the three required permissions:
 
 1. Microphone
 2. Speech Recognition
 3. Accessibility
 
-Put the cursor in any editor and press **Control–Option–Space**. Press it again to finish. The small floating bar can also stop or cancel a session without activating Cadence.
+Place the cursor in an editor and press the configured shortcut. The default is **Control–Option–Space**. Press it again to finish.
 
-## Why it types differently
+The floating bar can stop or cancel dictation without activating the main Cadence window. Drag the idle logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement, or choose an edge and size from Settings.
 
-Speech recognizers revise their newest partial result. Cadence compares consecutive hypotheses and holds back one unstable word. Once a prefix repeats, it sends only the newly stable suffix as individual Unicode keyboard events. This gives document editors incremental history while avoiding most visible rewrites.
+## How incremental dictation works
 
-The tradeoff is deliberate: a fully rewritten, LLM-polished paragraph and an append-only, keystroke-by-keystroke history cannot both be guaranteed. Cadence prioritizes the latter. See [Research and architecture](docs/RESEARCH.md).
+Live speech recognition results are provisional: the recognizer may revise its newest words as more audio arrives. Cadence compares consecutive hypotheses, holds back the unstable tail, and commits only the repeated stable prefix. Each committed delta is emitted as individual Unicode key-down and key-up events.
 
-## Project layout
+This design favors append-only document history. It cannot guarantee both unrestricted whole-paragraph AI rewriting and never changing already committed text. See [Research and architecture](docs/RESEARCH.md) for the model evaluation and design rationale.
 
-- `AppleSpeechEngine.swift` — live microphone capture and partial transcription
-- `TranscriptStabilizer.swift` — append-only stable-prefix algorithm
-- `KeystrokeInjector.swift` — character-level macOS keyboard events
-- `AppModel.swift` — session orchestration, local history, permissions
-- SwiftUI views — native hub, dictionary, settings, and floating Flow-style bar
+## Privacy and security
+
+- Audio is processed through Apple's Speech framework and is not saved by Cadence.
+- Transcript history and personal dictionary entries are stored locally in the app's user defaults.
+- Cadence does not include analytics, advertising, accounts, or cloud sync.
+- Update archives and the update feed are verified with Ed25519 signatures before installation.
+- The private update-signing key is not stored in this repository.
+
+Some locales may require Apple's network-backed speech service when on-device recognition is unavailable or disabled.
+
+Please report security issues through the repository's private security advisory feature. See [SECURITY.md](SECURITY.md).
+
+## Architecture
+
+| Component | Responsibility |
+|---|---|
+| `AppleSpeechEngine` | Captures microphone buffers and publishes partial recognition results |
+| `TranscriptStabilizer` | Converts revisable hypotheses into append-only stable deltas |
+| `KeystrokeInjector` | Sends character-level Unicode keyboard events to the focused app |
+| `FloatingPanelController` | Manages the cross-Space, dockable, draggable recording surface |
+| `AppModel` | Coordinates sessions, permissions, preferences, and local history |
+| `UpdateManager` | Connects Sparkle's signed update lifecycle to the app and settings |
 
 ## Development
+
+Run the test suite and debug build with:
 
 ```sh
 swift test
 swift build
 ```
 
-This repository uses Swift Package Manager so it can build with Command Line Tools alone. The packaging script creates and ad-hoc signs a real `.app` bundle.
+The stable-prefix logic and persisted public preference types have unit coverage. Microphone, accessibility, and cross-application typing behavior require manual testing because macOS permission prompts cannot be automated safely.
+
+## Releases
+
+Maintainers can prepare a signed release without uploading it:
+
+```sh
+./scripts/prepare-release.sh 0.2.0
+```
+
+Release artifacts are written to the ignored `release/` directory. The **Release Cadence** GitHub Actions workflow publishes the application archive and signed Sparkle appcast after its signing secret has been configured. See [Releasing Cadence](docs/RELEASING.md).
+
+## Contributing
+
+Contributions are welcome. Keep the speech engine, stabilization policy, and keyboard injection layers separate so recognition models can change without affecting editor behavior. Before opening a pull request, run `swift test` and verify that no credentials, local paths, generated builds, recordings, or transcript data are included.

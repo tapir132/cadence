@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct CadenceApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    private let updateManager = UpdateManager.shared
 
     var body: some Scene {
         WindowGroup {
@@ -15,11 +16,22 @@ struct CadenceApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1080, height: 720)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    AppModel.shared.selectedSection = .settings
+                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updateManager.checkForUpdates() }
+                    .disabled(!updateManager.canCheckForUpdates)
+            }
             CommandMenu("Dictation") {
                 Button(AppModel.shared.isListening ? "Stop Dictation" : "Start Dictation") {
                     AppModel.shared.toggleDictation()
                 }
-                .keyboardShortcut(.space, modifiers: [.control, .option])
 
                 Button("Paste Last Transcript") {
                     AppModel.shared.pasteLastTranscript()
@@ -40,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        configureApplicationIcon()
+        UpdateManager.shared.start()
         configureMainWindow()
         floatingPanel = FloatingPanelController(model: AppModel.shared)
         configureStatusItem()
@@ -49,6 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { openApp() }
+        return true
     }
 
     private func configureMainWindow() {
@@ -63,6 +82,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func configureApplicationIcon() {
+        guard let iconURL = Bundle.main.url(forResource: "Cadence", withExtension: "icns"),
+              let icon = NSImage(contentsOf: iconURL) else { return }
+        NSApp.applicationIconImage = icon
+    }
+
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Cadence")
@@ -70,6 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Open Cadence", action: #selector(openApp), keyEquivalent: "")
         menu.addItem(withTitle: "Start / Stop Dictation", action: #selector(toggleDictation), keyEquivalent: "")
         menu.addItem(withTitle: "Paste Last Transcript", action: #selector(pasteLast), keyEquivalent: "")
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Cadence", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
@@ -79,16 +107,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installShortcutMonitors() {
         let handler: (NSEvent) -> Void = { [weak self] event in
-            guard event.keyCode == 49,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.control, .option]
-            else { return }
+            guard AppModel.shared.shortcut.matches(event) else { return }
             self?.handleShortcut()
         }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            handler(event)
-            if event.keyCode == 49,
-               event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.control, .option] {
+            if AppModel.shared.shortcut.matches(event) {
                 self?.handleShortcut()
                 return nil
             }
@@ -109,4 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleDictation() { AppModel.shared.toggleDictation() }
     @objc private func pasteLast() { AppModel.shared.pasteLastTranscript() }
+    @objc private func openSettings() {
+        AppModel.shared.selectedSection = .settings
+        openApp()
+    }
+    @objc private func checkForUpdates() { UpdateManager.shared.checkForUpdates() }
 }

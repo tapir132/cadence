@@ -3,3 +3,11 @@ dist/
 .DS_Store
 *.xcuserstate
 DerivedData/
+IGNORE_REFRENCE/
+release/
+.env
+.env.*
+*.key
+*.pem
+*.p12
+sparkle-private-key*
