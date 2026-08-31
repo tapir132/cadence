@@ -184,7 +184,8 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.2
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().setFrameOrigin(target)
+                // animator().setFrameOrigin is silently ignored by NSWindow; only setFrame animates
+                panel.animator().setFrame(NSRect(origin: target, size: panel.frame.size), display: true)
             }
         }
         saveFreePosition(target, in: visible)
