@@ -13,7 +13,7 @@ This makes Cadence useful in editors where revision history, collaboration playb
 - Personal dictionary for names, acronyms, and specialized vocabulary
 - Configurable global keyboard shortcut
 - Compact floating logo with eight edge snap points, Command-drag free positioning, and adjustable sizing
-- Adjustable floating-bar size from 70% to 150%
+- Adjustable floating-bar size from 65% to 135%
 - Local transcript history and words-per-minute statistics
 - Signed automatic updates through Sparkle and GitHub Releases
 - Native SwiftUI and AppKit interface
@@ -48,7 +48,7 @@ Open **Settings** in Cadence and grant the three required permissions:
 
 Place the cursor in an editor and press the configured shortcut. The default is **Control–Option–Space**. Press it again to finish.
 
-The floating bar can stop or cancel dictation without activating the main Cadence window. Drag the idle logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement, or choose an edge and size from Settings.
+The floating bar can stop or cancel dictation without activating the main Cadence window. Drag the idle logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement. Double-click the logo to open Cadence; a single click never opens the app.
 
 ## How incremental dictation works
 
@@ -98,7 +98,7 @@ Maintainers can prepare a signed release without uploading it:
 ./scripts/prepare-release.sh 0.2.0
 ```
 
-Release artifacts are written to the ignored `release/` directory. The **Release Cadence** GitHub Actions workflow publishes the application archive and signed Sparkle appcast after its signing secret has been configured. See [Releasing Cadence](docs/RELEASING.md).
+Release artifacts are written to the ignored `release/` directory. The manual **Release Cadence** workflow publishes intentional Stable releases. The **Publish Edge Build** workflow updates one rolling prerelease after every successful commit on `main`; users must explicitly select Edge in Developer update settings. See [Releasing Cadence](docs/RELEASING.md).
 
 ## Contributing
 

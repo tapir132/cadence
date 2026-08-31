@@ -30,7 +30,7 @@ ditto -c -k --sequesterRsrc --keepParent "$PROJECT_DIR/dist/Cadence.app" "$ARCHI
   --maximum-versions 5 \
   --maximum-deltas 4 \
   --delta-compression lzfse \
-  -o appcast.xml \
+  -o "$RELEASE_DIR/appcast.xml" \
   "$RELEASE_DIR"
 
 echo "Prepared signed update artifacts in $RELEASE_DIR"

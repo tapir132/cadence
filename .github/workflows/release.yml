@@ -46,7 +46,7 @@ jobs:
               --download-url-prefix "https://github.com/tapir132/cadence/releases/download/v$VERSION/" \
               --maximum-versions 1 \
               --maximum-deltas 0 \
-              -o appcast.xml \
+              -o release/appcast.xml \
               release
 
       - name: Publish GitHub release

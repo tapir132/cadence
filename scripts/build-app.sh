@@ -9,6 +9,11 @@ cd "$PROJECT_DIR"
 "$PROJECT_DIR/scripts/generate-icon.sh" >/dev/null
 swift build -c release
 
+if [[ "$APP_DIR" != "$PROJECT_DIR/dist/Cadence.app" ]]; then
+  echo "Refusing to clean an unexpected app bundle path" >&2
+  exit 1
+fi
+rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources" "$CONTENTS_DIR/Frameworks"
 cp ".build/release/Cadence" "$CONTENTS_DIR/MacOS/Cadence"
 cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
@@ -27,6 +32,14 @@ ditto "$SPARKLE_FRAMEWORK" "$CONTENTS_DIR/Frameworks/Sparkle.framework"
 if ! otool -l "$CONTENTS_DIR/MacOS/Cadence" | grep -q '@executable_path/../Frameworks'; then
   install_name_tool -add_rpath '@executable_path/../Frameworks' "$CONTENTS_DIR/MacOS/Cadence"
 fi
+
+# SwiftPM may embed its local SDK/framework search directory as an absolute
+# fallback rpath. The application bundle must not depend on a build machine.
+while IFS= read -r RPATH; do
+  if [[ "$RPATH" == /* ]]; then
+    install_name_tool -delete_rpath "$RPATH" "$CONTENTS_DIR/MacOS/Cadence"
+  fi
+done < <(otool -l "$CONTENTS_DIR/MacOS/Cadence" | awk '/cmd LC_RPATH/{getline; getline; print $2}')
 
 codesign --force --deep --sign - "$APP_DIR"
 echo "$APP_DIR"

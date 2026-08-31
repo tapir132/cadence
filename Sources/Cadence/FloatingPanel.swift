@@ -94,7 +94,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             )
         }
 
-        let frame = NSRect(origin: clamped(origin, size: size, in: visible), size: size)
+        let frame = NSRect(origin: SnapGeometry.clamped(origin, size: size, in: visible), size: size)
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.24
@@ -140,7 +140,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         if freeDragWasRequested {
             snapOverlay.hide()
         } else {
-            let slot = nearestSnapSlot(to: panel.frame.origin, size: panel.frame.size, in: screen.visibleFrame)
+            let slot = SnapGeometry.nearestSlot(to: panel.frame.origin, size: panel.frame.size, in: screen.visibleFrame)
             snapOverlay.show(in: screen.visibleFrame, activeSlot: slot, relativeTo: panel)
         }
     }
@@ -158,10 +158,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         let visible = screen.visibleFrame
         let target: NSPoint
         if freeDragWasRequested {
-            target = clamped(panel.frame.origin, size: panel.frame.size, in: visible)
+            target = SnapGeometry.clamped(panel.frame.origin, size: panel.frame.size, in: visible)
         } else {
-            let slot = nearestSnapSlot(to: panel.frame.origin, size: panel.frame.size, in: visible)
-            target = snapOrigin(for: slot, size: panel.frame.size, in: visible)
+            let slot = SnapGeometry.nearestSlot(to: panel.frame.origin, size: panel.frame.size, in: visible)
+            target = SnapGeometry.origin(for: slot, size: panel.frame.size, in: visible)
         }
         if panel.frame.origin != target {
             NSAnimationContext.runAnimationGroup { context in
@@ -193,58 +193,12 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         if model.barPlacement != .free { model.barPlacement = .free }
     }
 
-    private func nearestSnapSlot(to origin: NSPoint, size: NSSize, in visible: NSRect) -> SnapSlot {
-        let center = NSPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
-        return SnapSlot.allCases.min {
-            distance(from: center, to: snapCenter(for: $0, size: size, in: visible)) <
-                distance(from: center, to: snapCenter(for: $1, size: size, in: visible))
-        } ?? .bottom
-    }
-
-    private func distance(from first: NSPoint, to second: NSPoint) -> CGFloat {
-        hypot(first.x - second.x, first.y - second.y)
-    }
-
-    private func snapCenter(for slot: SnapSlot, size: NSSize, in visible: NSRect) -> NSPoint {
-        let origin = snapOrigin(for: slot, size: size, in: visible)
-        return NSPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
-    }
-
-    private func snapOrigin(for slot: SnapSlot, size: NSSize, in visible: NSRect) -> NSPoint {
-        let inset = 1.0
-        let left = visible.minX + inset
-        let centerX = visible.midX - size.width / 2
-        let right = visible.maxX - size.width - inset
-        let bottom = visible.minY + inset
-        let middleY = visible.midY - size.height / 2
-        let top = visible.maxY - size.height - inset
-        let origin: NSPoint
-        switch slot {
-        case .topLeft: origin = NSPoint(x: left, y: top)
-        case .top: origin = NSPoint(x: centerX, y: top)
-        case .topRight: origin = NSPoint(x: right, y: top)
-        case .right: origin = NSPoint(x: right, y: middleY)
-        case .bottomRight: origin = NSPoint(x: right, y: bottom)
-        case .bottom: origin = NSPoint(x: centerX, y: bottom)
-        case .bottomLeft: origin = NSPoint(x: left, y: bottom)
-        case .left: origin = NSPoint(x: left, y: middleY)
-        }
-        return clamped(origin, size: size, in: visible)
-    }
-
     private func screen(containing point: NSPoint) -> NSScreen? {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
     }
 
     private var activeScreen: NSScreen? {
         NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) }) ?? NSScreen.main
-    }
-
-    private func clamped(_ origin: NSPoint, size: NSSize, in frame: NSRect) -> NSPoint {
-        NSPoint(
-            x: min(max(origin.x, frame.minX), max(frame.minX, frame.maxX - size.width)),
-            y: min(max(origin.y, frame.minY), max(frame.minY, frame.maxY - size.height))
-        )
     }
 
     private static func scaledSize(for model: AppModel) -> NSSize {
@@ -281,15 +235,32 @@ private final class FloatingInteractionView<Content: View>: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
+        switch FloatingClickAction(clickCount: event.clickCount) {
+        case .open:
             onDoubleClick?()
-        } else if event.clickCount == 1 {
+        case .drag:
             onSingleMouseDown?(event)
+        case .ignore:
+            break
         }
     }
 }
 
-private enum SnapSlot: Int, CaseIterable {
+enum FloatingClickAction: Equatable {
+    case drag
+    case open
+    case ignore
+
+    init(clickCount: Int) {
+        switch clickCount {
+        case 1: self = .drag
+        case 2: self = .open
+        default: self = .ignore
+        }
+    }
+}
+
+enum SnapSlot: Int, CaseIterable {
     case topLeft
     case top
     case topRight
@@ -298,6 +269,53 @@ private enum SnapSlot: Int, CaseIterable {
     case bottom
     case bottomLeft
     case left
+}
+
+struct SnapGeometry {
+    static func nearestSlot(to origin: NSPoint, size: NSSize, in visible: NSRect) -> SnapSlot {
+        let proposedCenter = NSPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+        return SnapSlot.allCases.min {
+            distance(from: proposedCenter, to: center(for: $0, size: size, in: visible)) <
+                distance(from: proposedCenter, to: center(for: $1, size: size, in: visible))
+        } ?? .bottom
+    }
+
+    static func origin(for slot: SnapSlot, size: NSSize, in visible: NSRect) -> NSPoint {
+        let inset = 1.0
+        let left = visible.minX + inset
+        let centerX = visible.midX - size.width / 2
+        let right = visible.maxX - size.width - inset
+        let bottom = visible.minY + inset
+        let middleY = visible.midY - size.height / 2
+        let top = visible.maxY - size.height - inset
+        let point: NSPoint = switch slot {
+        case .topLeft: NSPoint(x: left, y: top)
+        case .top: NSPoint(x: centerX, y: top)
+        case .topRight: NSPoint(x: right, y: top)
+        case .right: NSPoint(x: right, y: middleY)
+        case .bottomRight: NSPoint(x: right, y: bottom)
+        case .bottom: NSPoint(x: centerX, y: bottom)
+        case .bottomLeft: NSPoint(x: left, y: bottom)
+        case .left: NSPoint(x: left, y: middleY)
+        }
+        return clamped(point, size: size, in: visible)
+    }
+
+    static func clamped(_ origin: NSPoint, size: NSSize, in frame: NSRect) -> NSPoint {
+        NSPoint(
+            x: min(max(origin.x, frame.minX), max(frame.minX, frame.maxX - size.width)),
+            y: min(max(origin.y, frame.minY), max(frame.minY, frame.maxY - size.height))
+        )
+    }
+
+    private static func center(for slot: SnapSlot, size: NSSize, in visible: NSRect) -> NSPoint {
+        let point = origin(for: slot, size: size, in: visible)
+        return NSPoint(x: point.x + size.width / 2, y: point.y + size.height / 2)
+    }
+
+    private static func distance(from first: NSPoint, to second: NSPoint) -> CGFloat {
+        hypot(first.x - second.x, first.y - second.y)
+    }
 }
 
 @MainActor

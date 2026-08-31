@@ -43,6 +43,13 @@ Run the **Release Cadence** workflow with the new semantic version. The workflow
 
 Installed copies read the appcast from the latest GitHub Release. Sparkle verifies the signed feed and archive, downloads the update, swaps the application atomically, and relaunches it.
 
+## Stable and Edge channels
+
+- **Stable** is the default. It reads only intentional, versioned GitHub Releases created by the manual release workflow.
+- **Edge** is opt-in under Developer update settings. Every successful commit on `main` replaces the assets on the single `edge` prerelease.
+
+Edge does not create a permanent release per commit. Its bundle build number uses the commit timestamp so Sparkle can order builds, while Stable releases from newer commits can supersede older Edge builds.
+
 ## Versioning rules
 
 - Use `X.Y.Z` semantic versions for `CFBundleShortVersionString`.

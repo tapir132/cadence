@@ -43,7 +43,7 @@ jobs:
               --download-url-prefix "https://github.com/tapir132/cadence/releases/download/edge/" \
               --maximum-versions 1 \
               --maximum-deltas 0 \
-              -o appcast.xml \
+              -o release/appcast.xml \
               release
 
       - name: Publish rolling Edge prerelease
