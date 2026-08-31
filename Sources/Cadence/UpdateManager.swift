@@ -15,8 +15,8 @@ enum UpdateChannel: String, CaseIterable, Identifiable {
 final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
     static let shared = UpdateManager()
 
-    private static let stableFeed = "https://github.com/tapir132/whisper-live/releases/latest/download/appcast.xml"
-    private static let edgeFeed = "https://github.com/tapir132/whisper-live/releases/download/edge/appcast.xml"
+    private static let stableFeed = "https://github.com/tapir132/cadence/releases/latest/download/appcast.xml"
+    private static let edgeFeed = "https://github.com/tapir132/cadence/releases/download/edge/appcast.xml"
 
     lazy var controller = SPUStandardUpdaterController(
         startingUpdater: false,

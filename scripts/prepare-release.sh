@@ -26,7 +26,7 @@ ditto -c -k --sequesterRsrc --keepParent "$PROJECT_DIR/dist/Cadence.app" "$ARCHI
 
 "$SPARKLE_BIN/generate_appcast" \
   --account app.cadence.updates \
-  --download-url-prefix "https://github.com/tapir132/whisper-live/releases/download/v$VERSION/" \
+  --download-url-prefix "https://github.com/tapir132/cadence/releases/download/v$VERSION/" \
   --maximum-versions 5 \
   --maximum-deltas 4 \
   --delta-compression lzfse \

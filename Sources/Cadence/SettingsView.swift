@@ -184,7 +184,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Cadence \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")")
                                 .font(.system(size: 13, weight: .semibold))
-                            Text("Updates are served from tapir132/whisper-live.")
+                            Text("Updates are served from tapir132/cadence.")
                                 .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                         }
                         Spacer()

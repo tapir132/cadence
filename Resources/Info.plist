@@ -35,7 +35,7 @@
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>SUFeedURL</key>
-    <string>https://github.com/tapir132/whisper-live/releases/latest/download/appcast.xml</string>
+    <string>https://github.com/tapir132/cadence/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>MbuViPzNlqUnPLA5SV73R6uPaNJAO52RkJds5RqMSc0=</string>
     <key>SURequireSignedFeed</key>

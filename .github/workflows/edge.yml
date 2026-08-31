@@ -40,7 +40,7 @@ jobs:
           printf '%s' "$SPARKLE_PRIVATE_KEY" | \
             .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
               --ed-key-file - \
-              --download-url-prefix "https://github.com/tapir132/whisper-live/releases/download/edge/" \
+              --download-url-prefix "https://github.com/tapir132/cadence/releases/download/edge/" \
               --maximum-versions 1 \
               --maximum-deltas 0 \
               -o appcast.xml \
