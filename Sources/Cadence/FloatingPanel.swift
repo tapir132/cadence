@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 @preconcurrency import Combine
 import SwiftUI
 
@@ -11,9 +11,8 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let snapOverlay = SnapTargetsOverlayController()
     private let recoveryOverlay: InsertionRecoveryOverlayController
     private var cancellables = Set<AnyCancellable>()
-    private var dragReleaseLatch = DragReleaseLatch()
+    private var isTrackingDrag = false
     private var freeDragWasRequested = false
-    private var dragEndTimer: Timer?
 
     init(model: AppModel) {
         self.model = model
@@ -36,7 +35,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         panel.delegate = self
         let interactionView = FloatingInteractionView(rootView: FloatingBar().environmentObject(model))
         interactionView.shouldCaptureMouse = { [weak model] in model?.isListening == false }
-        interactionView.onSingleMouseDown = { [weak self] event in self?.beginSystemDrag(with: event) }
+        interactionView.onSingleMouseDown = { [weak self] event in self?.beginTrackedDrag(with: event) }
         interactionView.onDoubleClick = { [weak self] in self?.openMainApp() }
         panel.contentView = interactionView
 
@@ -53,12 +52,12 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private func observePreferences() {
         model.$barPlacement
             .dropFirst()
-            .sink { [weak self] _ in self?.position(animated: true) }
+            .sink { [weak self] placement in self?.position(animated: true, placement: placement) }
             .store(in: &cancellables)
 
         model.$barScale
             .dropFirst()
-            .sink { [weak self] _ in self?.position(animated: true) }
+            .sink { [weak self] scale in self?.position(animated: true, scale: scale) }
             .store(in: &cancellables)
 
         model.$state
@@ -66,7 +65,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] isListening in
-                self?.position(animated: true)
+                self?.position(animated: true, isListening: isListening)
             }
             .store(in: &cancellables)
 
@@ -83,14 +82,20 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             .store(in: &cancellables)
     }
 
-    private func position(animated: Bool) {
+    private func position(
+        animated: Bool,
+        placement placementOverride: BarPlacement? = nil,
+        scale scaleOverride: Double? = nil,
+        isListening listeningOverride: Bool? = nil
+    ) {
         guard let screen = activeScreen else { return }
         let visible = screen.visibleFrame
-        let size = Self.scaledSize(for: model)
-        let margin = model.barPlacement == .bottom ? 1.0 : 8.0
+        let placement = placementOverride ?? model.barPlacement
+        let size = Self.scaledSize(for: model, scale: scaleOverride, isListening: listeningOverride)
+        let margin = placement == .bottom ? 1.0 : 8.0
         let origin: NSPoint
 
-        switch model.barPlacement {
+        switch placement {
         case .bottom:
             origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + margin)
         case .top:
@@ -120,51 +125,37 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func beginSystemDrag(with event: NSEvent) {
+    private func beginTrackedDrag(with event: NSEvent) {
         guard !model.isListening else { return }
-
-        // A missed release must never poison later drags. Re-arm from the
-        // current Window Server event counter on every mouse-down.
-        cancelDragTracking()
-        dragReleaseLatch.begin(
-            mouseUpCounter: CGEventSource.counterForEventType(
-                .combinedSessionState,
-                eventType: .leftMouseUp
-            )
-        )
+        isTrackingDrag = true
         freeDragWasRequested = event.modifierFlags.contains(.command)
+        let startingMouse = panel.convertPoint(toScreen: event.locationInWindow)
+        let startingOrigin = panel.frame.origin
         updateSnapPreview()
 
-        let timer = Timer(
-            timeInterval: 1.0 / 60.0,
-            target: self,
-            selector: #selector(pollSystemDrag(_:)),
-            userInfo: nil,
-            repeats: true
-        )
-        dragEndTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-        panel.performDrag(with: event)
-    }
+        while isTrackingDrag,
+              let nextEvent = panel.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            freeDragWasRequested = freeDragWasRequested || nextEvent.modifierFlags.contains(.command)
+            if nextEvent.type == .leftMouseUp {
+                finishTrackedDrag()
+                break
+            }
 
-    @objc private func pollSystemDrag(_ timer: Timer) {
-        guard dragReleaseLatch.isDragging else {
-            timer.invalidate()
-            return
-        }
-        freeDragWasRequested = freeDragWasRequested || NSEvent.modifierFlags.contains(.command)
-        let buttonIsDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
-        let mouseUpCounter = CGEventSource.counterForEventType(
-            .combinedSessionState,
-            eventType: .leftMouseUp
-        )
-        if dragReleaseLatch.releaseDetected(buttonIsDown: buttonIsDown, mouseUpCounter: mouseUpCounter) {
-            finishSystemDrag()
+            let mouse = panel.convertPoint(toScreen: nextEvent.locationInWindow)
+            let proposed = NSPoint(
+                x: startingOrigin.x + mouse.x - startingMouse.x,
+                y: startingOrigin.y + mouse.y - startingMouse.y
+            )
+            let screen = screen(containing: mouse) ?? activeScreen
+            if let visible = screen?.visibleFrame {
+                panel.setFrameOrigin(SnapGeometry.clamped(proposed, size: panel.frame.size, in: visible))
+            }
+            updateSnapPreview()
         }
     }
 
     private func updateSnapPreview() {
-        guard dragReleaseLatch.isDragging, let screen = activeScreen else { return }
+        guard isTrackingDrag, let screen = activeScreen else { return }
         if freeDragWasRequested {
             snapOverlay.hide()
         } else {
@@ -173,11 +164,9 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func finishSystemDrag() {
-        guard dragReleaseLatch.isDragging else { return }
-        dragReleaseLatch.end()
-        dragEndTimer?.invalidate()
-        dragEndTimer = nil
+    private func finishTrackedDrag() {
+        guard isTrackingDrag else { return }
+        isTrackingDrag = false
         defer {
             freeDragWasRequested = false
             snapOverlay.hide()
@@ -199,14 +188,6 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             }
         }
         saveFreePosition(target, in: visible)
-    }
-
-    private func cancelDragTracking() {
-        dragReleaseLatch.end()
-        dragEndTimer?.invalidate()
-        dragEndTimer = nil
-        freeDragWasRequested = false
-        snapOverlay.hide()
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -237,29 +218,16 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) }) ?? NSScreen.main
     }
 
-    private static func scaledSize(for model: AppModel) -> NSSize {
-        let base = model.isListening ? listeningBaseSize : idleBaseSize
-        return NSSize(width: base.width * model.barScale, height: base.height * model.barScale)
-    }
-}
-
-struct DragReleaseLatch {
-    private var startingMouseUpCounter: UInt32?
-
-    var isDragging: Bool { startingMouseUpCounter != nil }
-
-    mutating func begin(mouseUpCounter: UInt32) {
-        startingMouseUpCounter = mouseUpCounter
+    private static func scaledSize(
+        for model: AppModel,
+        scale scaleOverride: Double? = nil,
+        isListening listeningOverride: Bool? = nil
+    ) -> NSSize {
+        let scale = scaleOverride ?? model.barScale
+        let base = (listeningOverride ?? model.isListening) ? listeningBaseSize : idleBaseSize
+        return NSSize(width: base.width * scale, height: base.height * scale)
     }
 
-    func releaseDetected(buttonIsDown: Bool, mouseUpCounter: UInt32) -> Bool {
-        guard let startingMouseUpCounter else { return false }
-        return !buttonIsDown || mouseUpCounter != startingMouseUpCounter
-    }
-
-    mutating func end() {
-        startingMouseUpCounter = nil
-    }
 }
 
 @MainActor
