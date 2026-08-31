@@ -15,6 +15,7 @@ This makes Cadence useful in editors where revision history, collaboration playb
 - Compact floating logo with eight edge snap points, Command-drag free positioning, and adjustable sizing
 - Adjustable floating-bar size from 65% to 135%
 - Local transcript history and words-per-minute statistics
+- Failed-insertion detection with a non-activating transcript recovery card
 - Signed automatic updates through Sparkle and GitHub Releases
 - Native SwiftUI and AppKit interface
 
@@ -77,6 +78,7 @@ Please report security issues through the repository's private security advisory
 | `KeystrokeInjector` | Sends character-level Unicode keyboard events to the focused app |
 | `FloatingPanelController` | Manages the cross-Space, dockable, draggable recording surface |
 | `AppModel` | Coordinates sessions, permissions, preferences, and local history |
+| `TextInsertionVerifier` | Confirms delivery from accessibility text state and surfaces recoverable failures |
 | `UpdateManager` | Connects Sparkle's signed update lifecycle to the app and settings |
 
 ## Development

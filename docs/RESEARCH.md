@@ -74,11 +74,15 @@ TranscriptStabilizer
      ▼
 KeystrokeInjector ─────► focused macOS editor
      │                    character-level CGEvents
+     ├────► TextInsertionVerifier
+     │        cursor/text evidence or recovery card
      ▼
 Local transcript history / stats
 ```
 
 The SwiftUI hub and AppKit floating panel observe one `AppModel`. The non-activating panel stays on every Space so stopping does not steal focus from the document. A menu-bar item and global Control–Option–Space shortcut provide recovery paths. Speech, model choice, stabilization, and injection remain separate so a new engine does not affect UI or editor compatibility.
+
+Quartz does not return a delivery receipt for a posted keyboard event. Cadence therefore captures the target application's focused accessibility element and selection before dictation, waits until its character queue drains, and compares the target, focus, cursor, and accessible text afterward. A definite failure displays a non-activating recovery card and the transcript is already in local history. Editors that intentionally hide their text state are classified as unverifiable rather than generating a false warning. This uses Apple's documented [`AXUIElement`](https://developer.apple.com/documentation/applicationservices/axuielement_h) attributes; clipboard ownership is not treated as proof of insertion because [`NSPasteboard.changeCount`](https://developer.apple.com/documentation/appkit/nspasteboard/changecount) only reports ownership changes.
 
 The floating panel stores a normalized position rather than raw pixels, so a freely dragged bar remains on-screen after resolution changes. Preset docking supports every screen edge and scale is independent from placement. The global shortcut stores the hardware key code plus normalized modifiers, which keeps it reliable across keyboard layouts.
 

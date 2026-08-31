@@ -11,6 +11,12 @@ struct DictationRecord: Identifiable, Codable, Equatable {
     let wordsPerMinute: Int
 }
 
+struct InsertionRecovery: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    let appName: String
+}
+
 enum DictationState: Equatable {
     case idle
     case listening
@@ -32,6 +38,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var accessibilityAuthorized = false
     @Published private(set) var isRequestingPermissions = false
     @Published private(set) var permissionRequestMessage: String?
+    @Published private(set) var insertionRecovery: InsertionRecovery?
     @Published var selectedSection: SidebarSection = .home
     @Published var dictionary: [String] = [] { didSet { persistDictionary() } }
     @Published var useOnDeviceRecognition = true
@@ -49,6 +56,8 @@ final class AppModel: ObservableObject {
     private var stabilizer = TranscriptStabilizer(holdbackWords: 1)
     private var startedAt: Date?
     private var targetAppName = "Another app"
+    private var insertionSnapshot: TextInsertionSnapshot?
+    private var insertionVerificationTask: Task<Void, Never>?
     private var stopFallbackTask: Task<Void, Never>?
 
     var isListening: Bool { state == .listening || state == .finishing }
@@ -106,6 +115,10 @@ final class AppModel: ObservableObject {
 
     func startDictation() async {
         guard state == .idle || isError else { return }
+        // A final recognition result can arrive faster than the last characters
+        // are emitted. Never cancel that tail when a new session starts.
+        await injector.waitUntilDrained()
+        guard state == .idle || isError else { return }
         refreshPermissions()
         guard microphoneAuthorized, speechAuthorized else {
             state = .error("Microphone and Speech Recognition access are required.")
@@ -125,7 +138,10 @@ final class AppModel: ObservableObject {
         liveText = ""
         committedText = ""
         stabilizer.reset()
-        injector.cancelPending()
+        insertionVerificationTask?.cancel()
+        insertionRecovery = nil
+        injector.beginSession()
+        insertionSnapshot = TextInsertionVerifier.capture()
         startedAt = Date()
         state = .listening
 
@@ -143,6 +159,7 @@ final class AppModel: ObservableObject {
         } catch {
             state = .error(error.localizedDescription)
             startedAt = nil
+            insertionSnapshot = nil
         }
     }
 
@@ -167,6 +184,7 @@ final class AppModel: ObservableObject {
         committedText = ""
         audioLevel = 0
         stabilizer.reset()
+        insertionSnapshot = nil
     }
 
     func requestPermissions() {
@@ -214,6 +232,16 @@ final class AppModel: ObservableObject {
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func copyInsertionRecovery() {
+        guard let recovery = insertionRecovery else { return }
+        copy(recovery.text)
+        insertionRecovery = nil
+    }
+
+    func dismissInsertionRecovery() {
+        insertionRecovery = nil
     }
 
     func pasteLastTranscript() {
@@ -265,6 +293,10 @@ final class AppModel: ObservableObject {
         }
         speechEngine.cancel()
         let finalText = committedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let insertedText = committedText
+        let snapshot = insertionSnapshot
+        let completedTargetAppName = targetAppName
+        insertionSnapshot = nil
         let duration = max(Date().timeIntervalSince(startedAt ?? Date()), 1)
         if !finalText.isEmpty {
             let record = DictationRecord(
@@ -281,6 +313,24 @@ final class AppModel: ObservableObject {
         liveText = ""
         committedText = ""
         stabilizer.reset()
+
+        guard !finalText.isEmpty else { return }
+        insertionVerificationTask?.cancel()
+        insertionVerificationTask = Task { [weak self] in
+            guard let self else { return }
+            await injector.waitUntilDrained()
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            let result = TextInsertionVerifier.verify(
+                snapshot,
+                insertedText: insertedText,
+                postingFailed: injector.hadPostingFailure
+            )
+            if result == .failed {
+                insertionRecovery = InsertionRecovery(text: finalText, appName: completedTargetAppName)
+            }
+        }
     }
 
     private func persistDictionary() {

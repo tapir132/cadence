@@ -9,6 +9,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let panel: NSPanel
     private let model: AppModel
     private let snapOverlay = SnapTargetsOverlayController()
+    private let recoveryOverlay: InsertionRecoveryOverlayController
     private var cancellables = Set<AnyCancellable>()
     private var isSystemDragging = false
     private var freeDragWasRequested = false
@@ -16,6 +17,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
 
     init(model: AppModel) {
         self.model = model
+        recoveryOverlay = InsertionRecoveryOverlayController(model: model)
         let size = Self.scaledSize(for: model)
         panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
@@ -65,6 +67,18 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             .dropFirst()
             .sink { [weak self] isListening in
                 self?.position(animated: true)
+            }
+            .store(in: &cancellables)
+
+        model.$insertionRecovery
+            .removeDuplicates()
+            .sink { [weak self] recovery in
+                guard let self else { return }
+                if recovery == nil {
+                    recoveryOverlay.hide()
+                } else if let screen = activeScreen {
+                    recoveryOverlay.show(near: panel.frame, in: screen.visibleFrame)
+                }
             }
             .store(in: &cancellables)
     }
@@ -204,6 +218,107 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private static func scaledSize(for model: AppModel) -> NSSize {
         let base = model.isListening ? listeningBaseSize : idleBaseSize
         return NSSize(width: base.width * model.barScale, height: base.height * model.barScale)
+    }
+}
+
+@MainActor
+private final class InsertionRecoveryOverlayController {
+    private let panel: NSPanel
+
+    init(model: AppModel) {
+        panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: NSSize(width: 390, height: 190)),
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.contentView = NSHostingView(rootView: InsertionRecoveryCard().environmentObject(model))
+    }
+
+    func show(near floatingFrame: NSRect, in visible: NSRect) {
+        let size = panel.frame.size
+        let preferredBelow = floatingFrame.minY - size.height - 10
+        let preferredAbove = floatingFrame.maxY + 10
+        let y = preferredBelow >= visible.minY ? preferredBelow : min(preferredAbove, visible.maxY - size.height)
+        let origin = SnapGeometry.clamped(
+            NSPoint(x: floatingFrame.midX - size.width / 2, y: y),
+            size: size,
+            in: visible.insetBy(dx: 8, dy: 8)
+        )
+        panel.setFrameOrigin(origin)
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+    }
+}
+
+private struct InsertionRecoveryCard: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let recovery = model.insertionRecovery {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    BrandMark(size: 30)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("It appears that it was not pasted in.")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        Text("Here’s a copy of your transcript from \(recovery.appName).")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.58))
+                    }
+                    Spacer()
+                    Button { model.dismissInsertionRecovery() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.white.opacity(0.58))
+                }
+
+                Text(recovery.text)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(CadenceTheme.cream.opacity(0.86))
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.07)))
+
+                HStack {
+                    Spacer()
+                    Button {
+                        model.copyInsertionRecovery()
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(CadenceTheme.ink)
+                            .padding(.horizontal, 14)
+                            .frame(height: 30)
+                            .background(Capsule().fill(CadenceTheme.lime))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(16)
+            .frame(width: 390, height: 190)
+            .foregroundStyle(CadenceTheme.cream)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(CadenceTheme.ink.opacity(0.98))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.12)))
+            )
+        }
     }
 }
 
