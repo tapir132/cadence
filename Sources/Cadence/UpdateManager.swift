@@ -6,7 +6,7 @@ enum UpdateChannel: String, CaseIterable, Identifiable {
     case edge
 
     var id: String { rawValue }
-    var title: String { self == .stable ? "Stable" : "Edge" }
+    var title: String { self == .stable ? "Release" : "Edge" }
 }
 
 /// Sparkle owns update scheduling, signature verification, atomic installation,

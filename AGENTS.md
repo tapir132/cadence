@@ -40,7 +40,8 @@ When debugging similar failures, separately verify event tracking, destination c
 - Keep commits focused and preserve unrelated user changes.
 - After pushing an Edge build, wait for the GitHub workflow to finish and verify that the published appcast references the new commit.
 - Test the exact artifact delivered through the updater when a bug could differ between local and published builds.
-- Do not create a stable release for every commit. Stable releases require an intentional release decision; Edge builds may follow `main`.
+- Do not create a versioned release for every commit. Edge builds may follow `main`; a versioned release must promote the exact Edge commit that passed the manual smoke test.
+- Treat versioned releases below `1.0.0` as Public Beta milestones. Stable releases begin at `1.0.0`.
 - Do not claim completion until the original user-visible failure has been reproduced and verified as fixed, or clearly state which verification could not be performed.
 
 ## Public repository hygiene

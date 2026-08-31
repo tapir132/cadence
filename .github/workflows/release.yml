@@ -4,9 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Semantic version (for example, 0.2.0)
+        description: Semantic version (0.x releases are Public Beta; for example, 0.2.0)
         required: true
         type: string
+      edge_commit:
+        description: Commit SHA of the exact Edge build that passed testing
+        required: true
+        type: string
+      smoke_tested:
+        description: Confirm this Edge build passed the manual release smoke test
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -18,9 +27,24 @@ jobs:
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.edge_commit }}
+          fetch-depth: 0
 
       - name: Test
-        run: swift test
+        run: swift test -Xswiftc -warnings-as-errors
+
+      - name: Validate release candidate
+        env:
+          SMOKE_TESTED: ${{ inputs.smoke_tested }}
+        run: |
+          [[ "$SMOKE_TESTED" == "true" ]]
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          curl -fsSL \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/edge/appcast.xml" \
+            | grep -Fq "edge.$short_sha"
 
       - name: Validate version and configure bundle
         env:
@@ -33,6 +57,14 @@ jobs:
 
       - name: Build Cadence
         run: ./scripts/build-app.sh
+
+      - name: Verify release application
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          codesign --verify --deep --strict dist/Cadence.app
+          actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/Cadence.app/Contents/Info.plist)"
+          [[ "$actual_version" == "$VERSION" ]]
 
       - name: Create and sign Sparkle feed
         env:
@@ -54,9 +86,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: |
+          title="Cadence $VERSION"
+          if [[ "$VERSION" == 0.* ]]; then
+            title="Cadence Beta $VERSION"
+          fi
           gh release create "v$VERSION" \
             "release/Cadence-$VERSION.zip" \
             release/appcast.xml \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Cadence $VERSION" \
+            --title "$title" \
             --generate-notes

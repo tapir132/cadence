@@ -36,23 +36,32 @@ Export the private key to a temporary file:
 
 Copy the file contents into the repository Actions secret named `SPARKLE_PRIVATE_KEY`, then securely delete the temporary file. Do not print the key in logs or pass it as a command-line argument.
 
-Run the **Release Cadence** workflow with the new semantic version. The workflow creates a GitHub Release containing:
+After the exact Edge build passes the manual smoke test, run the **Release Cadence** workflow with:
+
+- The new semantic version
+- The commit SHA shown in that Edge build's version
+- The smoke-test confirmation enabled
+
+The workflow refuses to publish if the commit is not on `main`, is no longer the current Edge build, or lacks the explicit smoke-test confirmation. It creates a GitHub Release containing:
 
 - `Cadence-X.Y.Z.zip`
 - `appcast.xml`
 
 Installed copies read the appcast from the latest GitHub Release. Sparkle verifies the signed feed and archive, downloads the update, swaps the application atomically, and relaunches it.
 
-## Stable and Edge channels
+## Release maturity and update channels
 
-- **Stable** is the default. It reads only intentional, versioned GitHub Releases created by the manual release workflow.
+- **Release** is the default update channel. It reads only intentional, versioned GitHub Releases created by the manual release workflow.
 - **Edge** is opt-in under Developer update settings. Every successful commit on `main` replaces the assets on the single `edge` prerelease.
 
-Edge does not create a permanent release per commit. Its bundle build number uses the commit timestamp so Sparkle can order builds, while Stable releases from newer commits can supersede older Edge builds.
+Every versioned release below `1.0.0` is a Public Beta milestone and is titled accordingly. These remain normal GitHub releases—not GitHub prereleases—so Sparkle's default latest-release feed can deliver them. Cadence becomes Stable at `1.0.0`.
+
+Edge does not create a permanent release per commit. Its bundle build number uses the commit timestamp so Sparkle can order builds, while Release builds from newer commits can supersede older Edge builds.
 
 ## Versioning rules
 
 - Use `X.Y.Z` semantic versions for `CFBundleShortVersionString`.
+- Use `0.Y.Z` for Public Beta milestones and begin Stable releases at `1.0.0`.
 - The release scripts derive a monotonically increasing numeric `CFBundleVersion`.
 - Never reuse a published version or replace a published archive with different bytes.
 - Keep the public key stable. Losing the private key prevents existing installations from accepting future updates.

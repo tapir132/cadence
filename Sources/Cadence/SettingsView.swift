@@ -198,9 +198,9 @@ struct SettingsView: View {
 
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Developer update channel").font(.system(size: 13, weight: .semibold))
+                            Text("Update channel").font(.system(size: 13, weight: .semibold))
                             Text(updates.channel == .stable
-                                 ? "Stable installs intentional GitHub Releases only."
+                                 ? "Release installs tested, versioned Public Beta builds."
                                  : "Edge installs every successful build from main and may be unstable.")
                                 .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                         }

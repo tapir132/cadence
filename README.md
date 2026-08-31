@@ -101,7 +101,7 @@ Maintainers can prepare a signed release without uploading it:
 ./scripts/prepare-release.sh 0.2.0
 ```
 
-Release artifacts are written to the ignored `release/` directory. The manual **Release Cadence** workflow publishes intentional Stable releases. The **Publish Edge Build** workflow updates one rolling prerelease after every successful commit on `main`; users must explicitly select Edge in Developer update settings. See [Releasing Cadence](docs/RELEASING.md).
+Release artifacts are written to the ignored `release/` directory. The manual **Release Cadence** workflow promotes an explicitly tested Edge commit to an intentional, versioned release. Releases below `1.0.0` are labeled Public Beta; `1.0.0` and later are Stable. The **Publish Edge Build** workflow updates one rolling prerelease after every successful commit on `main`; users must explicitly select Edge in update settings. See [Releasing Cadence](docs/RELEASING.md).
 
 ## Contributing
 
