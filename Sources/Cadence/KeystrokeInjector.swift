@@ -47,17 +47,28 @@ final class KeystrokeInjector {
     }
 
     private func post(_ character: Character) -> Bool {
-        guard AXIsProcessTrusted() else { return false }
+        guard AXIsProcessTrusted(), let events = Self.keyEvents(for: character) else { return false }
+        events.down.post(tap: .cghidEventTap)
+        events.up.post(tap: .cghidEventTap)
+        return true
+    }
+
+    /// Events created from a nil source inherit the live hardware modifier
+    /// state. With a hold-to-talk shortcut the user holds ⌃⌥ for the whole
+    /// utterance, so every typed letter reached the editor as a ⌃⌥ shortcut
+    /// and was dropped. Use a private source and clear the flags explicitly.
+    nonisolated static func keyEvents(for character: Character) -> (down: CGEvent, up: CGEvent)? {
+        let source = CGEventSource(stateID: .privateState)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { return nil }
         let units = Array(String(character).utf16)
-        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-              let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return false }
         units.withUnsafeBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
             down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: base)
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: base)
         }
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-        return true
+        down.flags = []
+        up.flags = []
+        return (down, up)
     }
 }
