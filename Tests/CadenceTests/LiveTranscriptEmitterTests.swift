@@ -117,3 +117,25 @@ import Testing
     )?.insertion ?? ""
     #expect(inserted == "Version this as like a like 0.2.")
 }
+
+@Test func optionalTypingBufferAllowsARecentPrefixToChangeBeforeInsertion() throws {
+    var emitter = LiveTranscriptEmitter(insertionDelay: .seconds(1))
+    let start = ContinuousClock.now
+
+    #expect(try emitter.consume("We write essays", at: start)?.insertion == "")
+    #expect(
+        try emitter.consume(
+            "We edit essays",
+            at: start.advanced(by: .milliseconds(450))
+        )?.insertion == ""
+    )
+    #expect(
+        try emitter.consume(
+            "We edit essays",
+            at: start.advanced(by: .milliseconds(1_500))
+        )?.insertion == "We edit"
+    )
+
+    let final = try emitter.finalize("We edit essays", continuesAfterPause: false)
+    #expect(final?.insertion == " essays.")
+}

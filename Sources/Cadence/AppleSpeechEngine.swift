@@ -123,6 +123,8 @@ actor LiveSpeechTranscriber {
         _ audio: AsyncStream<[Float]>,
         cleanupEnabled: Bool = false,
         dictionaryTerms: [String] = [],
+        snippets: [TextSnippet] = [],
+        insertionDelay: Duration = .zero,
         onUpdate: @escaping @Sendable (LiveTranscriptUpdate) async -> Void
     ) async throws -> String {
         guard let manager, let vad else {
@@ -132,7 +134,9 @@ actor LiveSpeechTranscriber {
         try await manager.reset()
         var emitter = LiveTranscriptEmitter(
             cleanupEnabled: cleanupEnabled,
-            dictionaryTerms: dictionaryTerms
+            dictionaryTerms: dictionaryTerms,
+            snippets: snippets,
+            insertionDelay: insertionDelay
         )
         var vadState = VadStreamState.initial()
         var pendingSamples: [Float] = []

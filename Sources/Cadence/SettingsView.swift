@@ -51,6 +51,8 @@ struct SettingsView: View {
                     recognitionProfileRow
                     line
                     speechCleanupRow
+                    line
+                    typingBufferRow
                 }
                 .settingsSurface()
 
@@ -311,6 +313,25 @@ struct SettingsView: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .accessibilityLabel("Filler-word cleanup")
+        }
+        .disabled(model.isListening)
+        .padding(16)
+    }
+
+    private var typingBufferRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("One-second typing buffer").font(.system(size: 13, weight: .semibold))
+                Text("Keeps the preview live, but waits for completed words to remain stable for one extra second before they reach your editor. Pauses and shortcut release still flush immediately.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Toggle("One-second typing buffer", isOn: $model.typingBufferEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel("One-second typing buffer")
         }
         .disabled(model.isListening)
         .padding(16)

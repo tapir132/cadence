@@ -29,15 +29,30 @@ enum LiveTranscriptError: LocalizedError, Equatable {
 /// token, so the last whitespace-delimited word remains preview-only until its
 /// following boundary arrives or the segment is finalized.
 struct LiveTranscriptEmitter {
+    private struct PendingPrefix {
+        let text: String
+        let firstSeenAt: ContinuousClock.Instant
+    }
+
     private(set) var completedText = ""
     private(set) var currentPartial = ""
     private(set) var insertedCurrentPrefix = ""
+    private var pendingPrefixes: [PendingPrefix] = []
     let cleanupEnabled: Bool
     let dictionaryTerms: [String]
+    let snippets: [TextSnippet]
+    let insertionDelay: Duration
 
-    init(cleanupEnabled: Bool = false, dictionaryTerms: [String] = []) {
+    init(
+        cleanupEnabled: Bool = false,
+        dictionaryTerms: [String] = [],
+        snippets: [TextSnippet] = [],
+        insertionDelay: Duration = .zero
+    ) {
         self.cleanupEnabled = cleanupEnabled
         self.dictionaryTerms = dictionaryTerms
+        self.snippets = snippets
+        self.insertionDelay = insertionDelay
     }
 
     var transcript: String {
@@ -46,9 +61,13 @@ struct LiveTranscriptEmitter {
 
     var hasOpenSegment: Bool { !currentPartial.isEmpty || !insertedCurrentPrefix.isEmpty }
 
-    mutating func consume(_ rawPartial: String) throws -> LiveTranscriptUpdate? {
-        let partial = format(rawPartial)
-        guard partial != currentPartial else { return nil }
+    mutating func consume(
+        _ rawPartial: String,
+        at now: ContinuousClock.Instant = .now
+    ) throws -> LiveTranscriptUpdate? {
+        let formatted = format(rawPartial)
+        let partial = formatted.text
+        let partialChanged = partial != currentPartial
         guard partial.hasPrefix(insertedCurrentPrefix) else {
             throw LiveTranscriptError.revisedVisibleText(
                 previous: insertedCurrentPrefix,
@@ -57,22 +76,25 @@ struct LiveTranscriptEmitter {
         }
 
         currentPartial = partial
-        let safePrefix = safePrefix(in: partial)
+        let safePrefix = safePrefix(
+            in: partial,
+            snippetBoundaryCount: formatted.safePrefixCharacterCount
+        )
         // The model may temporarily withdraw the uncommitted frontier. In that
         // case `safePrefix` can be shorter than the text already inserted even
         // though `partial` still preserves every visible character. Update the
         // preview and wait for a later hypothesis instead of aborting.
         guard safePrefix.hasPrefix(insertedCurrentPrefix) else {
-            return LiveTranscriptUpdate(
-                transcript: transcript,
-                insertion: "",
-                sentenceFinal: false
-            )
+            return partialChanged
+                ? LiveTranscriptUpdate(transcript: transcript, insertion: "", sentenceFinal: false)
+                : nil
         }
 
-        let rawDelta = String(safePrefix.dropFirst(insertedCurrentPrefix.count))
+        let committablePrefix = delayedPrefix(from: safePrefix, at: now)
+        let rawDelta = String(committablePrefix.dropFirst(insertedCurrentPrefix.count))
         let insertion = insertionDelta(rawDelta)
-        insertedCurrentPrefix = safePrefix
+        insertedCurrentPrefix = committablePrefix
+        guard partialChanged || !insertion.isEmpty else { return nil }
         return LiveTranscriptUpdate(
             transcript: transcript,
             insertion: insertion,
@@ -85,7 +107,7 @@ struct LiveTranscriptEmitter {
     /// pause as language context and can decide whether punctuation belongs
     /// there. No visible text is revised.
     mutating func flushPauseTail(_ rawPartial: String) throws -> LiveTranscriptUpdate? {
-        let partial = format(rawPartial)
+        let partial = format(rawPartial).text
         guard !partial.isEmpty else { return nil }
         guard partial.hasPrefix(insertedCurrentPrefix) else {
             throw LiveTranscriptError.revisedVisibleText(
@@ -99,6 +121,7 @@ struct LiveTranscriptEmitter {
         let changed = partial != currentPartial || !insertion.isEmpty
         currentPartial = partial
         insertedCurrentPrefix = partial
+        pendingPrefixes.removeAll(keepingCapacity: true)
         guard changed else { return nil }
 
         return LiveTranscriptUpdate(
@@ -109,7 +132,7 @@ struct LiveTranscriptEmitter {
     }
 
     func pauseBoundaryDecision(for rawPartial: String) -> PauseBoundaryDecision {
-        PauseBoundaryClassifier.classify(format(rawPartial))
+        PauseBoundaryClassifier.classify(format(rawPartial).text)
     }
 
     /// Flushes the frontier word at a real sentence boundary. Parakeet normally
@@ -120,7 +143,8 @@ struct LiveTranscriptEmitter {
         _ rawFinal: String,
         continuesAfterPause: Bool
     ) throws -> LiveTranscriptUpdate? {
-        let unpunctuated = format(rawFinal)
+        let formatted = format(rawFinal)
+        let unpunctuated = formatted.text
         guard !unpunctuated.isEmpty else {
             currentPartial = ""
             insertedCurrentPrefix = ""
@@ -133,7 +157,9 @@ struct LiveTranscriptEmitter {
             )
         }
 
-        let final = Self.ensureSentencePunctuation(unpunctuated)
+        let final = formatted.endsWithBareSnippet
+            ? unpunctuated
+            : Self.ensureSentencePunctuation(unpunctuated)
         guard final.hasPrefix(insertedCurrentPrefix) else {
             throw LiveTranscriptError.revisedVisibleText(
                 previous: insertedCurrentPrefix,
@@ -146,6 +172,7 @@ struct LiveTranscriptEmitter {
         completedText = Self.join(completedText, final)
         currentPartial = ""
         insertedCurrentPrefix = ""
+        pendingPrefixes.removeAll(keepingCapacity: true)
 
         return LiveTranscriptUpdate(
             transcript: completedText,
@@ -158,13 +185,15 @@ struct LiveTranscriptEmitter {
         completedText = ""
         currentPartial = ""
         insertedCurrentPrefix = ""
+        pendingPrefixes.removeAll(keepingCapacity: true)
     }
 
-    private func format(_ transcript: String) -> String {
+    private func format(_ transcript: String) -> SnippetFormattingResult {
         let cleaned = SpeechCleanupFormatter.format(transcript, enabled: cleanupEnabled)
         let punctuated = SpokenPunctuationFormatter.format(cleaned)
-        return DictionaryTermFormatter.apply(to: punctuated, terms: dictionaryTerms)
+        let dictionaryCorrected = DictionaryTermFormatter.apply(to: punctuated, terms: dictionaryTerms)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        return SnippetFormatter.format(dictionaryCorrected, snippets: snippets)
     }
 
     private func insertionDelta(_ rawDelta: String) -> String {
@@ -173,17 +202,53 @@ struct LiveTranscriptEmitter {
         return (startsNewSegment ? " " : "") + rawDelta
     }
 
+    /// When the optional buffer is enabled, a safe prefix must remain present
+    /// for the configured duration before it becomes immutable editor text.
+    /// Prefix checkpoints preserve each word's own first-seen time, while any
+    /// checkpoint contradicted by a newer unpasted hypothesis is discarded.
+    private mutating func delayedPrefix(
+        from safePrefix: String,
+        at now: ContinuousClock.Instant
+    ) -> String {
+        guard insertionDelay > .zero else {
+            pendingPrefixes.removeAll(keepingCapacity: true)
+            return safePrefix
+        }
+
+        pendingPrefixes.removeAll { checkpoint in
+            !safePrefix.hasPrefix(checkpoint.text)
+                || !checkpoint.text.hasPrefix(insertedCurrentPrefix)
+        }
+        if safePrefix.count > insertedCurrentPrefix.count,
+           !pendingPrefixes.contains(where: { $0.text == safePrefix }) {
+            pendingPrefixes.append(PendingPrefix(text: safePrefix, firstSeenAt: now))
+        }
+
+        let eligible = pendingPrefixes
+            .filter { checkpoint in
+                checkpoint.firstSeenAt.duration(to: now) >= insertionDelay
+            }
+            .max { lhs, rhs in lhs.text.count < rhs.text.count }
+        guard let eligible else { return insertedCurrentPrefix }
+
+        pendingPrefixes.removeAll { $0.text.count <= eligible.text.count }
+        return eligible.text
+    }
+
     /// Everything before the frontier word is safe to insert. Exclude the
     /// boundary whitespace as well: the next committed word supplies its own
     /// leading separator, so a withdrawn frontier can still be replaced with
     /// sentence punctuation without leaving `word .` in the editor.
-    private func safePrefix(in transcript: String) -> String {
+    private func safePrefix(in transcript: String, snippetBoundaryCount: Int?) -> String {
         let commandBoundary = SpokenPunctuationFormatter.safePrefixEndBeforeTrailingCommand(in: transcript)
         let dictionaryBoundary = DictionaryTermFormatter.safePrefixEndBeforeTrailingCandidate(
             in: transcript,
             terms: dictionaryTerms
         )
-        if let boundary = [commandBoundary, dictionaryBoundary].compactMap({ $0 }).min() {
+        let snippetBoundary = snippetBoundaryCount.flatMap { count in
+            transcript.index(transcript.startIndex, offsetBy: count, limitedBy: transcript.endIndex)
+        }
+        if let boundary = [commandBoundary, dictionaryBoundary, snippetBoundary].compactMap({ $0 }).min() {
             return String(transcript[..<boundary])
         }
         guard let boundary = transcript.lastIndex(where: { $0.isWhitespace }) else { return "" }

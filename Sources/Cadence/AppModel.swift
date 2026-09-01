@@ -41,6 +41,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var insertionRecovery: InsertionRecovery?
     @Published var selectedSection: SidebarSection = .home
     @Published var dictionary: [String] = [] { didSet { persistDictionary() } }
+    @Published private(set) var snippets: [TextSnippet] = [] { didSet { persistSnippets() } }
     @Published var shortcut: ShortcutBinding = .standard {
         didSet {
             saveSettings()
@@ -58,12 +59,14 @@ final class AppModel: ObservableObject {
         }
     }
     @Published var speechCleanupEnabled = false { didSet { saveSettings() } }
+    @Published var typingBufferEnabled = false { didSet { saveSettings() } }
     @Published private(set) var freeBarX = 0.5
     @Published private(set) var freeBarY = 0.0
 
     private let speechEngine = AudioCaptureEngine()
     private let transcriber = LiveSpeechTranscriber()
     private let injector = KeystrokeInjector()
+    private let snippetStore = TextSnippetStore()
     private var startedAt: Date?
     private var targetAppName = "Another app"
     private var insertionSnapshot: TextInsertionSnapshot?
@@ -83,6 +86,7 @@ final class AppModel: ObservableObject {
     private init() {
         records = Self.loadRecords()
         dictionary = UserDefaults.standard.stringArray(forKey: "customDictionary") ?? ["Cadence", "macOS", "SwiftUI"]
+        snippets = loadSnippetsAndMigrateDefaults()
         if let data = UserDefaults.standard.data(forKey: "shortcut"),
            let saved = try? JSONDecoder().decode(ShortcutBinding.self, from: data) {
             shortcut = saved
@@ -96,6 +100,7 @@ final class AppModel: ObservableObject {
             recognitionProfile = saved
         }
         speechCleanupEnabled = UserDefaults.standard.bool(forKey: "speechCleanupEnabled")
+        typingBufferEnabled = UserDefaults.standard.bool(forKey: "typingBufferEnabled")
         freeBarX = UserDefaults.standard.object(forKey: "freeBarX") as? Double ?? 0.5
         freeBarY = UserDefaults.standard.object(forKey: "freeBarY") as? Double ?? 0
         if UserDefaults.standard.integer(forKey: "floatingBarDesignVersion") < 2 {
@@ -194,13 +199,17 @@ final class AppModel: ObservableObject {
             transcriptionTask?.cancel()
             let cleanupEnabled = speechCleanupEnabled
             let dictionaryTerms = dictionary
+            let snippetSnapshot = snippets
+            let insertionDelay: Duration = typingBufferEnabled ? .seconds(1) : .zero
             transcriptionTask = Task { [weak self] in
                 guard let self else { return }
                 do {
                     let text = try await transcriber.transcribe(
                         audio,
                         cleanupEnabled: cleanupEnabled,
-                        dictionaryTerms: dictionaryTerms
+                        dictionaryTerms: dictionaryTerms,
+                        snippets: snippetSnapshot,
+                        insertionDelay: insertionDelay
                     ) { [weak self] update in
                         await self?.consume(update)
                     }
@@ -284,6 +293,53 @@ final class AppModel: ObservableObject {
 
     func removeDictionaryTerms(at offsets: IndexSet) { dictionary.remove(atOffsets: offsets) }
 
+    @discardableResult
+    func saveSnippet(
+        id: UUID?,
+        trigger: String,
+        replacement: String
+    ) -> TextSnippetValidationError? {
+        if let error = TextSnippetValidator.validate(
+            trigger: trigger,
+            replacement: replacement,
+            among: snippets,
+            excluding: id
+        ) {
+            return error
+        }
+
+        let cleanTrigger = TextSnippetValidator.cleanedTrigger(trigger)
+        let cleanReplacement = TextSnippetValidator.cleanedReplacement(replacement)
+        let now = Date()
+        if let id, let index = snippets.firstIndex(where: { $0.id == id }) {
+            let previous = snippets[index]
+            snippets[index] = TextSnippet(
+                id: previous.id,
+                trigger: cleanTrigger,
+                replacement: cleanReplacement,
+                createdAt: previous.createdAt,
+                updatedAt: now
+            )
+        } else {
+            snippets.insert(
+                TextSnippet(
+                    id: UUID(),
+                    trigger: cleanTrigger,
+                    replacement: cleanReplacement,
+                    createdAt: now,
+                    updatedAt: now
+                ),
+                at: 0
+            )
+        }
+        snippets.sort { $0.updatedAt > $1.updatedAt }
+        return nil
+    }
+
+    func deleteSnippet(_ snippet: TextSnippet) {
+        snippets.removeAll { $0.id == snippet.id }
+    }
+
     func deleteRecord(_ record: DictationRecord) {
         records.removeAll { $0.id == record.id }
         persistRecords()
@@ -328,6 +384,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(barScale, forKey: "barScale")
         UserDefaults.standard.set(recognitionProfile.rawValue, forKey: "recognitionProfile")
         UserDefaults.standard.set(speechCleanupEnabled, forKey: "speechCleanupEnabled")
+        UserDefaults.standard.set(typingBufferEnabled, forKey: "typingBufferEnabled")
     }
 
     func saveFreeBarPosition(x: Double, y: Double) {
@@ -433,6 +490,14 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(dictionary, forKey: "customDictionary")
     }
 
+    private func persistSnippets() {
+        do {
+            try snippetStore.save(snippets)
+        } catch {
+            NSLog("Cadence could not save snippets: %@", error.localizedDescription)
+        }
+    }
+
     private func persistRecords() {
         if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: "records") }
     }
@@ -441,6 +506,27 @@ final class AppModel: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: "records"),
               let records = try? JSONDecoder().decode([DictationRecord].self, from: data) else { return [] }
         return records
+    }
+
+    private func loadSnippetsAndMigrateDefaults() -> [TextSnippet] {
+        if FileManager.default.fileExists(atPath: snippetStore.fileURL.path) {
+            do {
+                return try snippetStore.load()
+            } catch {
+                NSLog("Cadence could not load snippets: %@", error.localizedDescription)
+                return []
+            }
+        }
+        guard let data = UserDefaults.standard.data(forKey: "textSnippets"),
+              let legacy = try? JSONDecoder().decode([TextSnippet].self, from: data) else { return [] }
+        let sorted = legacy.sorted { $0.updatedAt > $1.updatedAt }
+        do {
+            try snippetStore.save(sorted)
+            UserDefaults.standard.removeObject(forKey: "textSnippets")
+        } catch {
+            NSLog("Cadence could not migrate snippets: %@", error.localizedDescription)
+        }
+        return sorted
     }
 }
 

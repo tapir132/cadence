@@ -200,6 +200,50 @@ func accurateProfileLoadsAndStreamsText() async throws {
     #expect(!final.isEmpty)
     #expect(recorder.insertedText == final)
 }
+
+/// Drives a spoken trigger through the production model and asserts that only
+/// the replacement—not an ordinary trigger followed by an edit—crosses the
+/// live insertion boundary.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_STREAMING_MODEL_TEST"] == "1"))
+func streamingModelExpandsSnippetWithoutPastingItsTrigger() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cadence-snippet-test-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let speechURL = directory.appendingPathComponent("speech.aiff")
+    try synthesize("Please send project update", to: speechURL)
+    let samples = try AudioConverter().resampleAudioFile(speechURL)
+        + Array(repeating: Float.zero, count: 32_000)
+    let saved = TextSnippet(
+        id: UUID(),
+        trigger: "project update",
+        replacement: "everything remains on schedule",
+        createdAt: .distantPast,
+        updatedAt: .distantPast
+    )
+
+    let transcriber = LiveSpeechTranscriber()
+    try await transcriber.prepare { _ in }
+    let (audio, continuation) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
+    let recorder = LiveUpdateRecorder()
+    let transcription = Task {
+        try await transcriber.transcribe(audio, snippets: [saved]) { update in
+            recorder.record(update)
+        }
+    }
+
+    yieldSamples(samples, to: continuation)
+    continuation.finish()
+    let final = try await transcription.value.lowercased()
+    #expect(final.contains("everything remains on schedule"), "Snippet did not expand: \(final)")
+    #expect(!final.contains("project update"), "Trigger leaked into final text: \(final)")
+    #expect(recorder.insertedText.lowercased() == final)
+    #expect(
+        !recorder.snapshot().map(\.insertion).joined().lowercased().contains("project update"),
+        "A live insertion exposed the trigger before expansion"
+    )
+}
 }
 
 private final class LiveUpdateRecorder: @unchecked Sendable {
