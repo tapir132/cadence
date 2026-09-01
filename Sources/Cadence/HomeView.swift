@@ -54,7 +54,7 @@ struct HomeView: View {
                     .font(.system(size: 44, weight: .medium, design: .serif))
                     .tracking(-1.6)
                     .foregroundStyle(CadenceTheme.ink)
-                Text("Put your cursor anywhere. Cadence streams stable words as real keystrokes while you speak.")
+                Text("Put your cursor anywhere. Hold the shortcut while you speak; Cadence types completed words live and finishes each sentence when you pause.")
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(CadenceTheme.muted)
                     .lineSpacing(3)

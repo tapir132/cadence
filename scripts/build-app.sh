@@ -19,6 +19,29 @@ cp ".build/release/Cadence" "$CONTENTS_DIR/MacOS/Cadence"
 cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "Resources/Cadence.icns" "$CONTENTS_DIR/Resources/Cadence.icns"
 
+# A locally installed smoke-test build may share a bundle identifier and update
+# preferences with an older published build. Give it a current numeric build
+# number so Sparkle cannot silently replace uncommitted fixes with the existing
+# Edge artifact. Distribution workflows configure their immutable version
+# before invoking this script and opt out of this local-only stamp.
+if [[ "${CADENCE_DISTRIBUTION_BUILD:-0}" != "1" ]]; then
+  LOCAL_BUILD_NUMBER="$(date +%s)"
+  LOCAL_SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS_DIR/Info.plist")"
+  LOCAL_REVISION="$(git -C "$PROJECT_DIR" rev-parse --short=7 HEAD)"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $LOCAL_BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $LOCAL_SHORT_VERSION-local.$LOCAL_REVISION" "$CONTENTS_DIR/Info.plist"
+fi
+
+# FluidAudio includes TTS resources in its product even though Cadence uses ASR
+# only. Keep the dependency bundle in the conventional sealed resource folder;
+# macOS code signing rejects arbitrary content at the .app bundle root.
+FLUID_AUDIO_RESOURCES="$PROJECT_DIR/.build/release/FluidAudio_FluidAudio.bundle"
+if [[ ! -d "$FLUID_AUDIO_RESOURCES" ]]; then
+  echo "FluidAudio resource bundle was not produced by Swift Package Manager" >&2
+  exit 1
+fi
+ditto "$FLUID_AUDIO_RESOURCES" "$CONTENTS_DIR/Resources/FluidAudio_FluidAudio.bundle"
+
 SPARKLE_FRAMEWORK="$PROJECT_DIR/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
   echo "Sparkle.framework was not resolved by Swift Package Manager" >&2

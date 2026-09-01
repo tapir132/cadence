@@ -13,6 +13,7 @@ enum FloatingBarMode: Equatable {
     case collapsed(FloatingDockEdge)
     case idle
     case listening
+    case error
 
     var baseSize: NSSize {
         switch self {
@@ -22,7 +23,7 @@ enum FloatingBarMode: Equatable {
             NSSize(width: 18, height: 58)
         case .idle:
             NSSize(width: 56, height: 56)
-        case .listening:
+        case .listening, .error:
             NSSize(width: 430, height: 72)
         }
     }
@@ -34,12 +35,14 @@ final class FloatingBarPresentation: ObservableObject {
 
     static func mode(
         isListening: Bool,
+        hasError: Bool,
         isHovered: Bool,
         isDragging: Bool,
         placement: BarPlacement,
         freeX: Double,
         freeY: Double
     ) -> FloatingBarMode {
+        if hasError { return .error }
         if isListening { return .listening }
         if isHovered || isDragging { return .idle }
 
@@ -84,6 +87,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         recoveryOverlay = InsertionRecoveryOverlayController(model: model)
         presentation.mode = FloatingBarPresentation.mode(
             isListening: model.isListening,
+            hasError: model.hasError,
             isHovered: false,
             isDragging: false,
             placement: model.barPlacement,
@@ -109,7 +113,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         let interactionView = FloatingInteractionView(
             rootView: FloatingBar(presentation: presentation).environmentObject(model)
         )
-        interactionView.shouldCaptureMouse = { [weak model] in model?.isListening == false }
+        interactionView.shouldCaptureMouse = { [weak model] in
+            guard let model else { return true }
+            return !model.isListening && !model.hasError
+        }
         interactionView.onSingleMouseDown = { [weak self] event in self?.beginTrackedDrag(with: event) }
         interactionView.onDoubleClick = { [weak self] in self?.openMainApp() }
         interactionView.onHoverChanged = { [weak self] isHovered in self?.setHovered(isHovered) }
@@ -137,11 +144,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             .store(in: &cancellables)
 
         model.$state
-            .map { state in state == .listening || state == .finishing }
             .removeDuplicates()
             .dropFirst()
-            .sink { [weak self] isListening in
-                self?.refreshPresentation(animated: true, isListening: isListening)
+            .sink { [weak self] _ in
+                self?.refreshPresentation(animated: true)
             }
             .store(in: &cancellables)
 
@@ -205,13 +211,12 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private func refreshPresentation(
         animated: Bool,
         placement placementOverride: BarPlacement? = nil,
-        scale scaleOverride: Double? = nil,
-        isListening listeningOverride: Bool? = nil
+        scale scaleOverride: Double? = nil
     ) {
         let placement = placementOverride ?? model.barPlacement
-        let isListening = listeningOverride ?? model.isListening
         let mode = FloatingBarPresentation.mode(
-            isListening: isListening,
+            isListening: model.isListening,
+            hasError: model.hasError,
             isHovered: isPointerInside,
             isDragging: isTrackingDrag,
             placement: placement,
@@ -241,13 +246,13 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             guard !Task.isCancelled, let self else { return }
             let pointerIsInside = NSMouseInRect(NSEvent.mouseLocation, panel.frame, false)
             isPointerInside = pointerIsInside
-            guard !pointerIsInside, !isTrackingDrag, !model.isListening else { return }
+            guard !pointerIsInside, !isTrackingDrag, !model.isListening, !model.hasError else { return }
             refreshPresentation(animated: true)
         }
     }
 
     private func beginTrackedDrag(with event: NSEvent) {
-        guard !model.isListening else { return }
+        guard !model.isListening, !model.hasError else { return }
         let startingMouse = panel.convertPoint(toScreen: event.locationInWindow)
         isTrackingDrag = true
         collapseTask?.cancel()
@@ -680,6 +685,8 @@ struct FloatingBar: View {
             switch presentation.mode {
             case .listening:
                 listeningBar
+            case .error:
+                errorBar
             case .idle:
                 idleLogo
             case let .collapsed(edge):
@@ -708,12 +715,11 @@ struct FloatingBar: View {
 
             WaveformMark(level: model.audioLevel, bars: 7)
 
-            Text(model.liveText.isEmpty ? "Listening…" : model.liveText)
+            Text(previewText)
                 .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(model.liveText.isEmpty ? Color.white.opacity(0.48) : CadenceTheme.cream)
+                .foregroundStyle(Color.white.opacity(0.62))
                 .lineLimit(1)
                 .frame(maxWidth: 215, alignment: .leading)
-                .contentTransition(.numericText())
 
             Button { model.stopDictation() } label: {
                 Image(systemName: model.state == .finishing ? "ellipsis" : "checkmark")
@@ -731,6 +737,50 @@ struct FloatingBar: View {
                 .fill(CadenceTheme.ink.opacity(0.97))
                 .overlay(Capsule().stroke(Color(red: 0.3, green: 0.29, blue: 0.26), lineWidth: 1))
                 .shadow(color: .black.opacity(0.24), radius: 16, y: 7)
+        )
+        .frame(width: 430, height: 72)
+    }
+
+    private var previewText: String {
+        if !model.liveText.isEmpty { return model.liveText }
+        return model.state == .finishing ? "Finishing…" : "Listening…"
+    }
+
+    private var errorBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(CadenceTheme.coral))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Dictation stopped")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(CadenceTheme.cream)
+                Text(model.errorMessage ?? "Cadence could not continue this dictation.")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.66))
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button { model.dismissError() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(CadenceTheme.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(CadenceTheme.cream))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss dictation error")
+        }
+        .padding(.horizontal, 10)
+        .frame(width: 408, height: 56)
+        .background(
+            Capsule()
+                .fill(CadenceTheme.ink.opacity(0.97))
+                .shadow(color: .black.opacity(0.24), radius: 8, y: 4)
         )
         .frame(width: 430, height: 72)
     }

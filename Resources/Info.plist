@@ -21,7 +21,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.5</string>
+    <string>0.2.0</string>
     <key>CFBundleVersion</key>
     <string>100</string>
     <key>LSMinimumSystemVersion</key>
@@ -30,8 +30,6 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Cadence uses the microphone to turn your voice into text.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Cadence uses speech recognition to create a live transcript while you speak.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>SUFeedURL</key>

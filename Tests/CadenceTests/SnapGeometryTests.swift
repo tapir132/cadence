@@ -64,6 +64,7 @@ struct SnapGeometryTests {
         #expect(mode(isHovered: true) == .idle)
         #expect(mode(isDragging: true) == .idle)
         #expect(mode(isListening: true) == .listening)
+        #expect(mode(hasError: true) == .error)
     }
 
     @MainActor
@@ -125,6 +126,7 @@ struct SnapGeometryTests {
     @MainActor
     private func mode(
         isListening: Bool = false,
+        hasError: Bool = false,
         isHovered: Bool = false,
         isDragging: Bool = false,
         placement: BarPlacement = .bottom,
@@ -133,6 +135,7 @@ struct SnapGeometryTests {
     ) -> FloatingBarMode {
         FloatingBarPresentation.mode(
             isListening: isListening,
+            hasError: hasError,
             isHovered: isHovered,
             isDragging: isDragging,
             placement: placement,

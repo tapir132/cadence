@@ -31,6 +31,33 @@ struct RootView: View {
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .trailing)))
+
+                if case let .error(message) = model.state {
+                    VStack {
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .foregroundStyle(CadenceTheme.coral)
+                            Text(message)
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(2)
+                            Spacer()
+                            Button { model.dismissError() } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .background(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(Color.white.opacity(0.94))
+                                .overlay(RoundedRectangle(cornerRadius: 11).stroke(CadenceTheme.line))
+                                .shadow(color: CadenceTheme.ink.opacity(0.1), radius: 12, y: 5)
+                        )
+                        .padding(16)
+                        Spacer()
+                    }
+                }
             }
         }
         .background(CadenceTheme.paper)
@@ -63,8 +90,8 @@ struct RootView: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 HStack {
-                    Circle().fill(model.isListening ? CadenceTheme.coral : CadenceTheme.lime).frame(width: 7, height: 7)
-                    Text(model.isListening ? "Listening now" : "Ready to dictate")
+                    Circle().fill(sidebarStatus.color).frame(width: 7, height: 7)
+                    Text(sidebarStatus.text)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.white.opacity(0.68))
                 }
@@ -106,5 +133,25 @@ struct RootView: View {
             .padding(.horizontal, 8)
         }
         .buttonStyle(.plain)
+    }
+
+    private var sidebarStatus: (text: String, color: Color) {
+        switch model.state {
+        case .listening:
+            ("Listening now", CadenceTheme.coral)
+        case .finishing:
+            ("Finishing sentence…", CadenceTheme.coral)
+        case .error:
+            ("Needs attention", CadenceTheme.coral)
+        case .idle:
+            switch model.speechModelStatus {
+            case .ready:
+                ("Ready to dictate", CadenceTheme.lime)
+            case .preparing:
+                ("Preparing model…", CadenceTheme.coral)
+            case .failed:
+                ("Model unavailable", CadenceTheme.coral)
+            }
+        }
     }
 }

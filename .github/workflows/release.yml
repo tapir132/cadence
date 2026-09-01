@@ -62,6 +62,8 @@ jobs:
         run: ./scripts/import-signing-identity.sh
 
       - name: Build Cadence
+        env:
+          CADENCE_DISTRIBUTION_BUILD: "1"
         run: ./scripts/build-app.sh
 
       - name: Verify release application

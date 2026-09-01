@@ -20,9 +20,7 @@ struct SettingsView: View {
                 VStack(spacing: 0) {
                     permissionRow("Microphone", detail: "Hear your voice", granted: model.microphoneAuthorized)
                     line
-                    permissionRow("Speech Recognition", detail: "Turn audio into partial words", granted: model.speechAuthorized)
-                    line
-                    permissionRow("Accessibility", detail: "Type into the focused app", granted: model.accessibilityAuthorized)
+                    permissionRow("Accessibility", detail: "Paste into the focused app", granted: model.accessibilityAuthorized)
                 }
                 .settingsSurface()
 
@@ -48,35 +46,8 @@ struct SettingsView: View {
 
                 sectionTitle("Recognition").padding(.top, 34)
                 VStack(spacing: 0) {
-                    Toggle(isOn: $model.useOnDeviceRecognition) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Prefer on-device recognition").font(.system(size: 13, weight: .semibold))
-                            Text("Keeps audio local when the selected language is available offline.")
-                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                    .padding(16)
-                    .onChange(of: model.useOnDeviceRecognition) { _, _ in model.saveSettings() }
+                    speechModelRow
                 }
-                .settingsSurface()
-
-                sectionTitle("Typing cadence").padding(.top, 34)
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Character spacing").font(.system(size: 13, weight: .semibold))
-                        Spacer()
-                        Text("\(Int(model.characterDelayMilliseconds)) ms")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(CadenceTheme.muted)
-                    }
-                    Slider(value: $model.characterDelayMilliseconds, in: 1...16, step: 1)
-                        .tint(CadenceTheme.ink)
-                        .onChange(of: model.characterDelayMilliseconds) { _, _ in model.saveSettings() }
-                    Text("Each character is emitted as a keyboard event. Slower spacing creates finer-grained document history.")
-                        .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
-                }
-                .padding(16)
                 .settingsSurface()
 
                 sectionTitle("Global shortcut").padding(.top, 34)
@@ -245,6 +216,44 @@ struct SettingsView: View {
     }
 
     private var line: some View { Rectangle().fill(CadenceTheme.line).frame(height: 1).padding(.leading, 16) }
+
+    private var speechModelRow: some View {
+        HStack(spacing: 12) {
+            switch model.speechModelStatus {
+            case .ready:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(CadenceTheme.ink)
+            case .preparing:
+                ProgressView().controlSize(.small)
+            case .failed:
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(CadenceTheme.coral)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Parakeet Unified English").font(.system(size: 13, weight: .semibold))
+                switch model.speechModelStatus {
+                case .ready:
+                    Group {
+                        Text("Ready · live transcription runs entirely on this Mac")
+                        Text("Say “period,” “full stop,” or “question mark” to insert punctuation.")
+                    }
+                    .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                case let .preparing(progress):
+                    Text(progress.map { "Preparing local model · \(Int($0 * 100))%" }
+                         ?? "Preparing the local speech model…")
+                        .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                case let .failed(message):
+                    Text(message).lineLimit(2)
+                        .font(.system(size: 11)).foregroundStyle(CadenceTheme.coral)
+                }
+            }
+            Spacer()
+            if case .failed = model.speechModelStatus {
+                Button("Retry") { model.retrySpeechModelPreparation() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(16)
+    }
 
     private func permissionRow(_ title: String, detail: String, granted: Bool) -> some View {
         HStack(spacing: 12) {

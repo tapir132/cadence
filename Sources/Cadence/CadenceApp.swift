@@ -97,17 +97,22 @@ final class GlobalHotKey {
     }
 
     /// Carbon cannot express a modifier-only chord, so those are observed with
-    /// event monitors. Global monitors need Accessibility trust, which typing
+    /// event monitors. Global monitors need Accessibility trust, which pasting
     /// into other apps already requires.
     private func registerModifierChord() {
         let flags: (NSEvent) -> Void = { [weak self] event in
-            self?.handleFlags(event.modifierFlags.intersection(ShortcutBinding.shortcutModifiers))
+            self?.handleModifierEvent(event)
         }
         monitors = [
             NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flags),
             NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { flags($0); return $0 }
         ].compactMap { $0 }
         isRegistered = monitors.count == 2
+    }
+
+    func handleModifierEvent(_ event: NSEvent) {
+        guard !CadenceSyntheticEvent.isPasteCommand(event) else { return }
+        handleFlags(event.modifierFlags.intersection(ShortcutBinding.shortcutModifiers))
     }
 
     /// A chord is down once exactly its modifiers are held, and up as soon as

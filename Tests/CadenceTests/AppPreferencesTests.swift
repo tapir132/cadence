@@ -108,6 +108,33 @@ import Testing
 }
 
 @MainActor
+@Test func livePasteDoesNotReleaseAnOptionOnlyShortcut() throws {
+    let hotKey = GlobalHotKey.shared
+    var events: [String] = []
+    hotKey.onPress = { events.append("press") }
+    hotKey.onRelease = { events.append("release") }
+    hotKey.binding = ShortcutBinding.modifierOnly([.option])
+    defer {
+        hotKey.binding = nil
+        hotKey.onPress = nil
+        hotKey.onRelease = nil
+    }
+
+    hotKey.handleFlags([.option])
+    #expect(events == ["press"])
+
+    let pasteEvents = try #require(KeystrokeInjector.pasteCommandEvents())
+    for event in pasteEvents where event.type == .flagsChanged {
+        hotKey.handleModifierEvent(try #require(NSEvent(cgEvent: event)))
+    }
+    #expect(events == ["press"])
+
+    // A real Option-up still ends the session.
+    hotKey.handleFlags([])
+    #expect(events == ["press", "release"])
+}
+
+@MainActor
 @Test func standardShortcutRegistersAsSystemHotKey() {
     let hotKey = GlobalHotKey.shared
     hotKey.binding = .standard

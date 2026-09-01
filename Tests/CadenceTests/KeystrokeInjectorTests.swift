@@ -1,19 +1,30 @@
+import AppKit
 import CoreGraphics
 import Testing
 @testable import Cadence
 
-/// Injected events must never carry modifier flags: with hold-to-talk the user
-/// is holding the shortcut's modifiers while text is typed.
-@Test func injectedKeyEventsCarryTheCharacterAndNoModifiers() throws {
-    let modifierMasks: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand, .maskShift, .maskSecondaryFn]
-    let events = try #require(KeystrokeInjector.keyEvents(for: "é"))
-    #expect(events.down.flags.intersection(modifierMasks).isEmpty)
-    #expect(events.up.flags.intersection(modifierMasks).isEmpty)
-    #expect(events.down.type == .keyDown)
-    #expect(events.up.type == .keyUp)
+@Test func pasteCommandUsesACompletePhysicalKeySequence() throws {
+    let events = try #require(KeystrokeInjector.pasteCommandEvents())
+    #expect(events.count == 4)
+    #expect(events.map(\.type) == [.flagsChanged, .keyDown, .keyUp, .flagsChanged])
+    #expect(events.map { $0.getIntegerValueField(.keyboardEventKeycode) } == [0x37, 0x09, 0x09, 0x37])
+    #expect(events[0].flags.contains(.maskCommand))
+    #expect(events[1].flags.contains(.maskCommand))
+    #expect(events[2].flags.contains(.maskCommand))
+    #expect(!events[3].flags.contains(.maskCommand))
+    for event in events {
+        #expect(event.getIntegerValueField(.eventSourceUserData) == CadenceSyntheticEvent.pasteCommandMarker)
+        let appKitEvent = try #require(NSEvent(cgEvent: event))
+        #expect(CadenceSyntheticEvent.isPasteCommand(appKitEvent))
+    }
+}
 
-    var length = 0
-    var units = [UniChar](repeating: 0, count: 4)
-    events.down.keyboardGetUnicodeString(maxStringLength: units.count, actualStringLength: &length, unicodeString: &units)
-    #expect(String(utf16CodeUnits: units, count: length) == "é")
+@MainActor
+@Test func pasteboardPreservesACompleteUnicodeTranscript() {
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let transcript = "First words, a pause… then café 日本語 and the final words."
+
+    #expect(KeystrokeInjector.write(transcript, to: pasteboard))
+    #expect(pasteboard.string(forType: .string) == transcript)
 }

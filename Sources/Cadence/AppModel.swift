@@ -34,14 +34,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var audioLevel: Float = 0
     @Published private(set) var records: [DictationRecord] = []
     @Published private(set) var microphoneAuthorized = false
-    @Published private(set) var speechAuthorized = false
     @Published private(set) var accessibilityAuthorized = false
+    @Published private(set) var speechModelStatus: SpeechModelStatus = .preparing(progress: nil)
     @Published private(set) var isRequestingPermissions = false
     @Published private(set) var permissionRequestMessage: String?
     @Published private(set) var insertionRecovery: InsertionRecovery?
     @Published var selectedSection: SidebarSection = .home
     @Published var dictionary: [String] = [] { didSet { persistDictionary() } }
-    @Published var useOnDeviceRecognition = true
     @Published var shortcut: ShortcutBinding = .standard {
         didSet {
             saveSettings()
@@ -52,18 +51,15 @@ final class AppModel: ObservableObject {
     @Published var barScale = 0.85 { didSet { saveSettings() } }
     @Published private(set) var freeBarX = 0.5
     @Published private(set) var freeBarY = 0.0
-    @Published var characterDelayMilliseconds = 4.0 {
-        didSet { injector.characterDelayMilliseconds = characterDelayMilliseconds }
-    }
 
-    private let speechEngine = AppleSpeechEngine()
+    private let speechEngine = AudioCaptureEngine()
+    private let transcriber = LiveSpeechTranscriber()
     private let injector = KeystrokeInjector()
-    private var stabilizer = TranscriptStabilizer(holdbackWords: 1)
     private var startedAt: Date?
     private var targetAppName = "Another app"
     private var insertionSnapshot: TextInsertionSnapshot?
     private var insertionVerificationTask: Task<Void, Never>?
-    private var stopFallbackTask: Task<Void, Never>?
+    private var transcriptionTask: Task<Void, Never>?
 
     var isListening: Bool { state == .listening || state == .finishing }
     var lastTranscript: String { records.first?.text ?? "" }
@@ -78,8 +74,6 @@ final class AppModel: ObservableObject {
     private init() {
         records = Self.loadRecords()
         dictionary = UserDefaults.standard.stringArray(forKey: "customDictionary") ?? ["Cadence", "macOS", "SwiftUI"]
-        characterDelayMilliseconds = UserDefaults.standard.object(forKey: "characterDelay") as? Double ?? 4
-        useOnDeviceRecognition = UserDefaults.standard.object(forKey: "onDevice") as? Bool ?? true
         if let data = UserDefaults.standard.data(forKey: "shortcut"),
            let saved = try? JSONDecoder().decode(ShortcutBinding.self, from: data) {
             shortcut = saved
@@ -96,7 +90,7 @@ final class AppModel: ObservableObject {
             freeBarY = 0
             UserDefaults.standard.set(2, forKey: "floatingBarDesignVersion")
         }
-        injector.characterDelayMilliseconds = characterDelayMilliseconds
+        Task { [weak self] in await self?.prepareSpeechModel() }
     }
 
     func toggleDictation() {
@@ -138,13 +132,13 @@ final class AppModel: ObservableObject {
 
     func startDictation() async {
         guard state == .idle || isError else { return }
-        // A final recognition result can arrive faster than the last characters
-        // are emitted. Never cancel that tail when a new session starts.
+        // Command-V is delivered asynchronously. Never replace its pasteboard
+        // value by starting a new session before the prior paste drains.
         await injector.waitUntilDrained()
         guard state == .idle || isError else { return }
         refreshPermissions()
-        guard microphoneAuthorized, speechAuthorized else {
-            state = .error("Microphone and Speech Recognition access are required.")
+        guard microphoneAuthorized else {
+            state = .error("Microphone access is required.")
             selectedSection = .settings
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -155,31 +149,52 @@ final class AppModel: ObservableObject {
             selectedSection = .settings
             return
         }
+        guard speechModelStatus == .ready else {
+            switch speechModelStatus {
+            case .preparing:
+                state = .error("Cadence is preparing its local speech model. Try again when Settings shows Ready.")
+            case let .failed(message):
+                state = .error("The local speech model could not load: \(message)")
+            case .ready:
+                break
+            }
+            selectedSection = .settings
+            return
+        }
 
         targetAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Another app"
         if targetAppName == "Cadence" { targetAppName = "the last active editor" }
         liveText = ""
         committedText = ""
-        stabilizer.reset()
         insertionVerificationTask?.cancel()
         insertionRecovery = nil
-        injector.beginSession()
         insertionSnapshot = TextInsertionVerifier.capture()
+        injector.beginSession(target: insertionSnapshot)
         startedAt = Date()
         state = .listening
 
         do {
-            try await speechEngine.start(
-                contextualStrings: dictionary,
-                requiresOnDeviceRecognition: useOnDeviceRecognition,
-                onUpdate: { [weak self] update in
-                    Task { @MainActor in self?.consume(update) }
-                },
-                onLevel: { [weak self] level in
-                    Task { @MainActor in self?.audioLevel = level }
+            let audio = try speechEngine.start { [weak self] level in
+                Task { @MainActor in self?.audioLevel = level }
+            }
+            transcriptionTask?.cancel()
+            transcriptionTask = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let text = try await transcriber.transcribe(audio) { [weak self] update in
+                        await self?.consume(update)
+                    }
+                    guard !Task.isCancelled else { return }
+                    completeTranscription(text)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    failTranscription(error)
                 }
-            )
+            }
         } catch {
+            speechEngine.cancel()
             state = .error(error.localizedDescription)
             startedAt = nil
             insertionSnapshot = nil
@@ -187,18 +202,15 @@ final class AppModel: ObservableObject {
     }
 
     func stopDictation() {
-        guard isListening else { return }
+        guard state == .listening else { return }
         state = .finishing
+        audioLevel = 0
         speechEngine.finish()
-        stopFallbackTask?.cancel()
-        stopFallbackTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(650))
-            guard !Task.isCancelled else { return }
-            self?.finalizeSession()
-        }
     }
 
     func cancelDictation() {
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
         speechEngine.cancel()
         injector.cancelPending()
         state = .idle
@@ -206,7 +218,6 @@ final class AppModel: ObservableObject {
         liveText = ""
         committedText = ""
         audioLevel = 0
-        stabilizer.reset()
         insertionSnapshot = nil
     }
 
@@ -215,11 +226,11 @@ final class AppModel: ObservableObject {
         isRequestingPermissions = true
         permissionRequestMessage = nil
         Task {
-            _ = await AppleSpeechEngine.requestPermissions()
+            _ = await AudioCaptureEngine.requestPermissions()
             refreshPermissions()
             if !accessibilityAuthorized { requestAccessibilityPermission() }
             isRequestingPermissions = false
-            if !microphoneAuthorized || !speechAuthorized {
+            if !microphoneAuthorized {
                 permissionRequestMessage = "If access was previously denied, enable Cadence in System Settings → Privacy & Security."
             }
         }
@@ -235,12 +246,14 @@ final class AppModel: ObservableObject {
 
     func refreshPermissions() {
         // Polled while Settings is visible; only publish real changes.
-        let microphone = AppleSpeechEngine.microphoneAuthorized
-        let speech = AppleSpeechEngine.speechAuthorized
+        let microphone = AudioCaptureEngine.microphoneAuthorized
         let accessibility = AXIsProcessTrusted()
         if microphone != microphoneAuthorized { microphoneAuthorized = microphone }
-        if speech != speechAuthorized { speechAuthorized = speech }
         if accessibility != accessibilityAuthorized { accessibilityAuthorized = accessibility }
+    }
+
+    func retrySpeechModelPreparation() {
+        Task { [weak self] in await self?.prepareSpeechModel() }
     }
 
     func addDictionaryTerm(_ term: String) {
@@ -271,14 +284,25 @@ final class AppModel: ObservableObject {
         insertionRecovery = nil
     }
 
+    func dismissError() {
+        if case .error = state { state = .idle }
+    }
+
+    var errorMessage: String? {
+        guard case let .error(message) = state else { return nil }
+        return message
+    }
+
+    var hasError: Bool { errorMessage != nil }
+
     func pasteLastTranscript() {
         guard !lastTranscript.isEmpty else { return }
+        let snapshot = TextInsertionVerifier.capture()
+        injector.beginSession(target: snapshot)
         injector.enqueue(lastTranscript)
     }
 
     func saveSettings() {
-        UserDefaults.standard.set(characterDelayMilliseconds, forKey: "characterDelay")
-        UserDefaults.standard.set(useOnDeviceRecognition, forKey: "onDevice")
         if let data = try? JSONEncoder().encode(shortcut) { UserDefaults.standard.set(data, forKey: "shortcut") }
         UserDefaults.standard.set(barPlacement.rawValue, forKey: "barPlacement")
         UserDefaults.standard.set(barScale, forKey: "barScale")
@@ -297,30 +321,38 @@ final class AppModel: ObservableObject {
         barScale = 0.85
     }
 
-    private var isError: Bool { if case .error = state { return true }; return false }
+    private var isError: Bool { hasError }
 
-    private func consume(_ update: SpeechUpdate) {
-        guard isListening else { return }
-        liveText = update.text
-        let delta = stabilizer.consume(update.text, isFinal: update.isFinal)
-        if !delta.isEmpty {
-            committedText += delta
-            injector.enqueue(delta)
+    private func prepareSpeechModel() async {
+        speechModelStatus = .preparing(progress: nil)
+        do {
+            try await transcriber.prepare { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    guard self?.speechModelStatus != .ready else { return }
+                    self?.speechModelStatus = .preparing(progress: progress)
+                }
+            }
+            speechModelStatus = .ready
+        } catch {
+            speechModelStatus = .failed(error.localizedDescription)
         }
-        if update.isFinal { finalizeSession() }
     }
 
-    private func finalizeSession() {
+    private func consume(_ update: LiveTranscriptUpdate) {
         guard isListening else { return }
-        stopFallbackTask?.cancel()
-        let remaining = stabilizer.flush(liveText)
-        if !remaining.isEmpty {
-            committedText += remaining
-            injector.enqueue(remaining)
-        }
-        speechEngine.cancel()
-        let finalText = committedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let insertedText = committedText
+        liveText = applyDictionaryCasing(to: update.transcript)
+        let insertion = applyDictionaryCasing(to: update.insertion)
+        guard !insertion.isEmpty else { return }
+        committedText += insertion
+        injector.enqueue(insertion)
+    }
+
+    private func completeTranscription(_ rawText: String) {
+        guard state == .finishing else { return }
+        transcriptionTask = nil
+        let finalText = applyDictionaryCasing(
+            to: rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         let snapshot = insertionSnapshot
         let completedTargetAppName = targetAppName
         insertionSnapshot = nil
@@ -333,15 +365,14 @@ final class AppModel: ObservableObject {
             records.insert(record, at: 0)
             records = Array(records.prefix(100))
             persistRecords()
+            liveText = finalText
         }
         state = .idle
         startedAt = nil
         audioLevel = 0
-        liveText = ""
-        committedText = ""
-        stabilizer.reset()
 
-        guard !finalText.isEmpty else { return }
+        let insertedText = committedText
+        guard !insertedText.isEmpty else { return }
         insertionVerificationTask?.cancel()
         insertionVerificationTask = Task { [weak self] in
             guard let self else { return }
@@ -358,6 +389,38 @@ final class AppModel: ObservableObject {
                 insertionRecovery = InsertionRecovery(text: finalText, appName: completedTargetAppName)
             }
         }
+    }
+
+    private func failTranscription(_ error: Error) {
+        guard isListening else { return }
+        NSLog("Cadence stopped a live transcription: %@", String(describing: error))
+        transcriptionTask = nil
+        speechEngine.cancel()
+        state = .error(error.localizedDescription)
+        startedAt = nil
+        audioLevel = 0
+        insertionSnapshot = nil
+    }
+
+    /// Streaming Parakeet does not safely revise already-inserted words for
+    /// arbitrary vocabulary boosting. Preserve the
+    /// user's exact capitalization only when those words were already decoded;
+    /// fuzzy replacement would risk inventing the very words this path avoids.
+    private func applyDictionaryCasing(to text: String) -> String {
+        var result = text
+        for term in dictionary.sorted(by: { $0.count > $1.count }) {
+            let escaped = NSRegularExpression.escapedPattern(for: term)
+            guard let expression = try? NSRegularExpression(
+                pattern: "(?i)(?<![\\p{L}\\p{N}_])\(escaped)(?![\\p{L}\\p{N}_])"
+            ) else { continue }
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            result = expression.stringByReplacingMatches(
+                in: result,
+                range: range,
+                withTemplate: NSRegularExpression.escapedTemplate(for: term)
+            )
+        }
+        return result
     }
 
     private func persistDictionary() {

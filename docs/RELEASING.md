@@ -10,13 +10,14 @@ The local Keychain account label is `app.cadence.updates`.
 
 ## Code signing identity
 
-macOS ties privacy grants (Accessibility, Microphone, Speech Recognition) to the app's code-signing identity. An ad-hoc signature has no identity beyond the binary's own hash, so every rebuild or update silently revoked those grants while System Settings still showed them enabled.
+macOS ties privacy grants such as Accessibility and Microphone to the app's code-signing identity. An ad-hoc signature has no identity beyond the binary's own hash, so every rebuild or update silently revoked those grants while System Settings still showed them enabled.
 
 Cadence is therefore signed with a self-signed certificate named `Cadence Signing`. It costs nothing and keeps grants stable across updates. It does not satisfy Gatekeeper, so first launches of a downloaded build still require right-click → Open, exactly as with an ad-hoc build. Only a paid Apple Developer ID with notarization removes that step.
 
 - The identity lives in a maintainer's login Keychain; its `.p12` export password is stored there under the service `app.cadence.signing`.
 - GitHub Actions reads the base64-encoded `.p12` from the secret `CADENCE_SIGNING_P12` and its password from `CADENCE_SIGNING_P12_PASSWORD`; `scripts/import-signing-identity.sh` installs it into a temporary keychain.
 - `scripts/build-app.sh` uses the identity when present and falls back to an ad-hoc signature otherwise, so contributors can build without it. The Edge and Release workflows refuse to publish a build that is not signed with it.
+- `scripts/build-app.sh` stamps ordinary local bundles with the current time and a `-local.<commit>` display suffix so an older Edge feed cannot replace a smoke-test build. Distribution workflows set `CADENCE_DISTRIBUTION_BUILD=1` only after configuring their immutable version.
 - Never replace the certificate casually: a new certificate is a new identity, and every user must re-grant Accessibility once. Keep the `.p12` backed up with the Sparkle key.
 
 To export the identity for a new maintainer or a new secret, open Keychain Access, select `Cadence Signing` under My Certificates, export it as `.p12`, then `base64 -i Cadence.p12 | gh secret set CADENCE_SIGNING_P12`.

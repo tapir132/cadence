@@ -6,11 +6,11 @@ product
 
 ## Users
 
-People who dictate substantial text on a Mac and need it to appear naturally in the focused editor as they speak. They may work in documents where revision history, collaboration playback, speed, and reliable recovery matter.
+People who dictate substantial text on a Mac and need accurate words to appear continuously and reliably in the focused editor. Speed, privacy, unobtrusive controls, and recoverability matter.
 
 ## Product Purpose
 
-Cadence provides fast, accurate, privacy-conscious macOS dictation that commits stable words incrementally instead of pasting a completed transcript all at once. Success means the interface stays out of the way, dictation remains visibly understandable, and users can trust that their words are typed, saved to history, or recoverable.
+Cadence provides fast, accurate, privacy-conscious macOS dictation by transcribing locally and inserting completed words live through the editor's standard paste path. Success means speech stays visibly in flow, pauses finalize the last words and punctuation without ending the session, and the transcript is saved or recoverable.
 
 ## Brand Personality
 

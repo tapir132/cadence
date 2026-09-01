@@ -18,7 +18,7 @@ struct DictionaryView: View {
                 .font(.system(size: 40, weight: .medium, design: .serif))
                 .tracking(-1.4)
                 .padding(.top, 28)
-            Text("Names, acronyms, and domain language are passed directly to the speech recognizer as context.")
+            Text("Cadence preserves the exact capitalization of these terms when they appear in a transcript.")
                 .font(.system(size: 13)).foregroundStyle(CadenceTheme.muted)
                 .padding(.top, 10)
 

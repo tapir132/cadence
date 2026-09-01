@@ -21,9 +21,10 @@ struct InsertionEvidence {
 struct InsertionEvidenceClassifier {
     static func classify(_ evidence: InsertionEvidence, insertedText: String) -> InsertionVerificationResult {
         guard !insertedText.isEmpty else { return .confirmed }
-        if evidence.postingFailed || evidence.targetApplicationChanged || evidence.focusedElementChanged {
+        if evidence.postingFailed || evidence.targetApplicationChanged {
             return .failed
         }
+        if evidence.focusedElementChanged { return .unavailable }
 
         if let originalRange = evidence.originalSelection,
            let currentRange = evidence.currentSelection {
@@ -64,17 +65,20 @@ struct InsertionEvidenceClassifier {
 @MainActor
 final class TextInsertionSnapshot {
     fileprivate let processIdentifier: pid_t
+    fileprivate let focusedWindow: AXUIElement
     fileprivate let focusedElement: AXUIElement
     fileprivate let originalValue: String?
     fileprivate let originalSelection: CFRange?
 
     fileprivate init(
         processIdentifier: pid_t,
+        focusedWindow: AXUIElement,
         focusedElement: AXUIElement,
         originalValue: String?,
         originalSelection: CFRange?
     ) {
         self.processIdentifier = processIdentifier
+        self.focusedWindow = focusedWindow
         self.focusedElement = focusedElement
         self.originalValue = originalValue
         self.originalSelection = originalSelection
@@ -90,10 +94,12 @@ enum TextInsertionVerifier {
         guard AXIsProcessTrusted(),
               let application = NSWorkspace.shared.frontmostApplication,
               application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let focusedWindow = focusedWindow(processIdentifier: application.processIdentifier),
               let focusedElement = focusedElement() else { return nil }
 
         return TextInsertionSnapshot(
             processIdentifier: application.processIdentifier,
+            focusedWindow: focusedWindow,
             focusedElement: focusedElement,
             originalValue: stringValue(of: focusedElement),
             originalSelection: selectedRange(of: focusedElement)
@@ -110,11 +116,15 @@ enum TextInsertionVerifier {
         }
 
         let currentApplication = NSWorkspace.shared.frontmostApplication
+        let currentWindow = currentApplication.flatMap {
+            focusedWindow(processIdentifier: $0.processIdentifier)
+        }
         let currentElement = focusedElement()
         let focusChanged = currentElement.map { !CFEqual($0, snapshot.focusedElement) } ?? true
+        let windowChanged = currentWindow.map { !CFEqual($0, snapshot.focusedWindow) } ?? true
         let evidence = InsertionEvidence(
             postingFailed: postingFailed,
-            targetApplicationChanged: currentApplication?.processIdentifier != snapshot.processIdentifier,
+            targetApplicationChanged: currentApplication?.processIdentifier != snapshot.processIdentifier || windowChanged,
             focusedElementChanged: focusChanged,
             originalValue: snapshot.originalValue,
             currentValue: stringValue(of: snapshot.focusedElement),
@@ -122,6 +132,24 @@ enum TextInsertionVerifier {
             currentSelection: selectedRange(of: snapshot.focusedElement)
         )
         return InsertionEvidenceClassifier.classify(evidence, insertedText: insertedText)
+    }
+
+    static func matchesCurrentTarget(_ snapshot: TextInsertionSnapshot) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.processIdentifier,
+              let currentWindow = focusedWindow(processIdentifier: snapshot.processIdentifier) else { return false }
+        return CFEqual(currentWindow, snapshot.focusedWindow)
+    }
+
+    private static func focusedWindow(processIdentifier: pid_t) -> AXUIElement? {
+        let application = AXUIElementCreateApplication(processIdentifier)
+        var rawValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            application,
+            kAXFocusedWindowAttribute as CFString,
+            &rawValue
+        ) == .success, let rawValue,
+              CFGetTypeID(rawValue) == AXUIElementGetTypeID() else { return nil }
+        return (rawValue as! AXUIElement)
     }
 
     private static func focusedElement() -> AXUIElement? {

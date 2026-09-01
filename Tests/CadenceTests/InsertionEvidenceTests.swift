@@ -41,6 +41,19 @@ import Testing
     #expect(InsertionEvidenceClassifier.classify(evidence, insertedText: "hello") == .unavailable)
 }
 
+@Test func insertionEvidenceDoesNotReportFailureForARecreatedTextElement() {
+    let evidence = InsertionEvidence(
+        postingFailed: false,
+        targetApplicationChanged: false,
+        focusedElementChanged: true,
+        originalValue: "Draft",
+        currentValue: "Draft",
+        originalSelection: CFRange(location: 5, length: 0),
+        currentSelection: CFRange(location: 5, length: 0)
+    )
+    #expect(InsertionEvidenceClassifier.classify(evidence, insertedText: " hello") == .unavailable)
+}
+
 @Test func insertionEvidenceDetectsTargetChangeOrPostingFailure() {
     let changedTarget = InsertionEvidence(
         postingFailed: false,
