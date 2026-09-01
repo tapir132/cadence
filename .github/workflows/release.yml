@@ -55,6 +55,12 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" Resources/Info.plist
 
+      - name: Import signing identity
+        env:
+          CADENCE_SIGNING_P12: ${{ secrets.CADENCE_SIGNING_P12 }}
+          CADENCE_SIGNING_P12_PASSWORD: ${{ secrets.CADENCE_SIGNING_P12_PASSWORD }}
+        run: ./scripts/import-signing-identity.sh
+
       - name: Build Cadence
         run: ./scripts/build-app.sh
 
@@ -63,6 +69,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           codesign --verify --deep --strict dist/Cadence.app
+          codesign -dvv dist/Cadence.app 2>&1 | grep -Fq 'Authority=Cadence Signing'
           actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/Cadence.app/Contents/Info.plist)"
           [[ "$actual_version" == "$VERSION" ]]
 

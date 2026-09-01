@@ -41,5 +41,15 @@ while IFS= read -r RPATH; do
   fi
 done < <(otool -l "$CONTENTS_DIR/MacOS/Cadence" | awk '/cmd LC_RPATH/{getline; getline; print $2}')
 
-codesign --force --deep --sign - "$APP_DIR"
+# macOS privacy grants (Accessibility, Microphone) are keyed to the signing
+# identity. An ad-hoc signature's identity is the binary's own hash, so every
+# rebuild or update silently revoked them. Sign with the Cadence certificate
+# when it is present; contributors without it still get a runnable ad-hoc build.
+IDENTITY="${CADENCE_SIGNING_IDENTITY:-Cadence Signing}"
+if security find-identity -v -p codesigning | grep -Fq "\"$IDENTITY\""; then
+  codesign --force --deep --sign "$IDENTITY" "$APP_DIR"
+else
+  echo "Signing identity '$IDENTITY' not found; using an ad-hoc signature" >&2
+  codesign --force --deep --sign - "$APP_DIR"
+fi
 echo "$APP_DIR"

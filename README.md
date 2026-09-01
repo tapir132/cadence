@@ -38,7 +38,9 @@ Clone the repository, then run:
 open dist/Cadence.app
 ```
 
-The build uses Swift Package Manager and produces an ad-hoc-signed application bundle at `dist/Cadence.app`. A full Xcode installation is not required; current Command Line Tools are sufficient.
+The build uses Swift Package Manager and produces an application bundle at `dist/Cadence.app`. A full Xcode installation is not required; current Command Line Tools are sufficient.
+
+Official builds are signed with the project's `Cadence Signing` certificate so macOS privacy grants survive updates. Without that identity the script falls back to an ad-hoc signature, which works but makes macOS treat every rebuild as a new app: re-grant Accessibility after rebuilding. See [Releasing](docs/RELEASING.md) for details.
 
 ## First launch
 

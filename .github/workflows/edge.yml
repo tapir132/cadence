@@ -30,8 +30,17 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $base_version-edge.$short_sha" Resources/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" Resources/Info.plist
 
+      - name: Import signing identity
+        env:
+          CADENCE_SIGNING_P12: ${{ secrets.CADENCE_SIGNING_P12 }}
+          CADENCE_SIGNING_P12_PASSWORD: ${{ secrets.CADENCE_SIGNING_P12_PASSWORD }}
+        run: ./scripts/import-signing-identity.sh
+
       - name: Build Cadence
         run: ./scripts/build-app.sh
+
+      - name: Verify signing identity
+        run: codesign -dvv dist/Cadence.app 2>&1 | grep -Fq 'Authority=Cadence Signing'
 
       - name: Create signed Edge appcast
         run: |
