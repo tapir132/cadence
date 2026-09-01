@@ -54,3 +54,4 @@ Register the shortcut with Carbon `RegisterEventHotKey` instead: the window serv
 
 - Do not commit secrets, credentials, signing keys, tokens, private URLs, personal data, or machine-specific absolute paths.
 - Keep documentation useful to public contributors and phrase notes as durable engineering guidance.
+- Never add `Co-Authored-By`, session links, or any other tool-attribution trailers to commit messages or pull requests. Commit messages describe the change only.

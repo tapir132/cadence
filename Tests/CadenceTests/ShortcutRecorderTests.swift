@@ -104,6 +104,51 @@ struct ShortcutRecorderTests {
         #expect(button.title == "⌃⌥Space")
     }
 
+    private func flagsChanged(_ flags: NSEvent.ModifierFlags, code: UInt16, window: NSWindow) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: flags,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: code
+        ))
+    }
+
+    @Test func recorderCapturesModifierOnlyChordOnRelease() throws {
+        let (window, holder, button) = try makeHostedRecorder()
+        defer { window.close() }
+        button.performClick(nil)
+
+        NSApp.sendEvent(try flagsChanged([.control], code: 59, window: window))
+        NSApp.sendEvent(try flagsChanged([.control, .option], code: 58, window: window))
+        #expect(holder.shortcut == .standard)
+        NSApp.sendEvent(try flagsChanged([.option], code: 59, window: window))
+        NSApp.sendEvent(try flagsChanged([], code: 58, window: window))
+
+        #expect(holder.shortcut.isModifierOnly)
+        #expect(holder.shortcut.displayText == "⌃⌥")
+        #expect(button.title == "⌃⌥")
+    }
+
+    @Test func recorderRejectsShiftAloneAndKeepsRecording() throws {
+        let (window, holder, button) = try makeHostedRecorder()
+        defer { window.close() }
+        button.performClick(nil)
+
+        NSApp.sendEvent(try flagsChanged([.shift], code: 56, window: window))
+        NSApp.sendEvent(try flagsChanged([], code: 56, window: window))
+        #expect(holder.shortcut == .standard)
+        #expect(button.title == "Add ⌃⌥⌘ or F-key")
+
+        NSApp.sendEvent(try keyDown(code: 96, flags: .function, characters: "\u{F708}", window: window))
+        #expect(holder.shortcut.displayText == "F5")
+    }
+
     @Test func recordingSuspendsTheGlobalHotKeyUntilFinished() throws {
         let hotKey = GlobalHotKey.shared
         hotKey.binding = .standard

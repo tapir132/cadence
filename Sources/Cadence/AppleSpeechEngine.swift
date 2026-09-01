@@ -65,10 +65,7 @@ final class AppleSpeechEngine {
         let format = inputNode.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw SpeechEngineError.noInput }
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
-            onLevel(Self.normalizedLevel(buffer))
-        }
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.audioTap(request: request, onLevel: onLevel))
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             if let result {
@@ -98,6 +95,20 @@ final class AppleSpeechEngine {
     private func stopAudioEngine() {
         if audioEngine.isRunning { audioEngine.stop() }
         audioEngine.inputNode.removeTap(onBus: 0)
+    }
+
+    /// AVAudioEngine invokes the tap on its realtime messenger queue. A closure
+    /// written inside this main-actor class inherits its isolation, and Swift 6
+    /// then traps on the executor check the first time audio arrives, so the
+    /// block is built in a nonisolated context instead.
+    nonisolated static func audioTap(
+        request: SFSpeechAudioBufferRecognitionRequest,
+        onLevel: @escaping @Sendable (Float) -> Void
+    ) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            request.append(buffer)
+            onLevel(normalizedLevel(buffer))
+        }
     }
 
     nonisolated private static func normalizedLevel(_ buffer: AVAudioPCMBuffer) -> Float {

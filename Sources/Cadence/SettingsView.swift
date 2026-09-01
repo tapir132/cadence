@@ -85,8 +85,12 @@ struct SettingsView: View {
                         Text("Start or stop from any app").font(.system(size: 13, weight: .semibold))
                         Text("Keep your cursor in the document; Cadence stays out of the way.")
                             .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
-                        Text("Function keys work on their own. Hold fn if your keyboard uses them for volume and brightness.")
+                        Text("Press a combination, a function key (hold fn if it controls volume), or tap modifier keys alone such as ⌃⌥ or ⌘.")
                             .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        if model.shortcut.isModifierOnly, !model.accessibilityAuthorized {
+                            Text("Modifier-only shortcuts work outside Cadence once Accessibility is granted.")
+                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(CadenceTheme.coral)
+                        }
                     }
                     Spacer()
                     ShortcutRecorder(shortcut: $model.shortcut)

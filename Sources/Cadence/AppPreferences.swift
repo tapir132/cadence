@@ -33,7 +33,8 @@ enum BarPlacement: String, CaseIterable, Codable, Identifiable {
 }
 
 struct ShortcutBinding: Codable, Equatable, Sendable {
-    var keyCode: UInt16
+    /// `nil` is a modifier-only chord such as ⌃⌥, fired when it is released.
+    var keyCode: UInt16?
     var modifiersRawValue: UInt
     var keyLabel: String
 
@@ -53,6 +54,8 @@ struct ShortcutBinding: Codable, Equatable, Sendable {
         105: "F13", 107: "F14", 113: "F15", 106: "F16", 64: "F17", 79: "F18",
         80: "F19", 90: "F20"
     ]
+
+    var isModifierOnly: Bool { keyCode == nil }
 
     var modifiers: NSEvent.ModifierFlags {
         NSEvent.ModifierFlags(rawValue: modifiersRawValue).intersection(Self.shortcutModifiers)
@@ -85,12 +88,23 @@ struct ShortcutBinding: Codable, Equatable, Sendable {
     static func from(_ event: NSEvent) -> ShortcutBinding? {
         let modifiers = event.modifierFlags.intersection(shortcutModifiers)
         let isFunctionKey = functionKeyLabels[event.keyCode] != nil
-        guard isFunctionKey || !modifiers.intersection([.control, .option, .command]).isEmpty else { return nil }
+        guard isFunctionKey || hasPrimaryModifier(modifiers) else { return nil }
         return ShortcutBinding(
             keyCode: event.keyCode,
             modifiersRawValue: modifiers.rawValue,
             keyLabel: label(for: event)
         )
+    }
+
+    /// Shift alone is tapped constantly while typing, so a chord needs ⌃, ⌥, or ⌘.
+    static func modifierOnly(_ flags: NSEvent.ModifierFlags) -> ShortcutBinding? {
+        let modifiers = flags.intersection(shortcutModifiers)
+        guard hasPrimaryModifier(modifiers) else { return nil }
+        return ShortcutBinding(keyCode: nil, modifiersRawValue: modifiers.rawValue, keyLabel: "")
+    }
+
+    private static func hasPrimaryModifier(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        !modifiers.intersection([.control, .option, .command]).isEmpty
     }
 
     private static func label(for event: NSEvent) -> String {
@@ -131,12 +145,14 @@ struct ShortcutRecorder: NSViewRepresentable {
 /// Recording reads keys through a local event monitor instead of first-responder
 /// `keyDown`, so menu key equivalents, SwiftUI focus, and the enclosing scroll
 /// view never see the pressed keys. The global hot key is suspended meanwhile so
-/// re-recording the current shortcut cannot toggle dictation.
+/// re-recording the current shortcut cannot toggle dictation. Modifier-only
+/// chords are recorded when the last modifier is released without any other key.
 final class ShortcutRecorderNSView: NSView {
     var onShortcut: ((ShortcutBinding) -> Void)?
     var shortcut: ShortcutBinding = .standard { didSet { updateTitle() } }
     private let button = NSButton(title: "", target: nil, action: nil)
     private var monitor: Any?
+    private var heldModifiers: NSEvent.ModifierFlags = []
     private var isRecording: Bool { monitor != nil }
 
     override var intrinsicContentSize: NSSize { NSSize(width: 148, height: 32) }
@@ -158,27 +174,46 @@ final class ShortcutRecorderNSView: NSView {
     @objc private func beginRecording() {
         guard !isRecording else { return }
         button.title = "Press shortcut…"
+        heldModifiers = []
         GlobalHotKey.shared.isSuspended = true
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { [weak self] event in
+        let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown]
+        monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             guard let self else { return event }
-            guard event.type == .keyDown else {
+            switch event.type {
+            case .flagsChanged:
+                let current = event.modifierFlags.intersection(ShortcutBinding.shortcutModifiers)
+                if !current.isEmpty {
+                    heldModifiers.formUnion(current)
+                } else if !heldModifiers.isEmpty {
+                    let chord = heldModifiers
+                    heldModifiers = []
+                    accept(ShortcutBinding.modifierOnly(chord))
+                }
+                return event
+            case .keyDown:
+                heldModifiers = []
+                if event.keyCode == 53 {
+                    finishRecording()
+                } else {
+                    accept(ShortcutBinding.from(event))
+                }
+                return nil
+            default:
                 finishRecording()
                 return event
             }
-            if event.keyCode == 53 {
-                finishRecording()
-                return nil
-            }
-            guard let value = ShortcutBinding.from(event) else {
-                NSSound.beep()
-                button.title = "Add ⌃⌥⌘ or F-key"
-                return nil
-            }
-            shortcut = value
-            onShortcut?(value)
-            finishRecording()
-            return nil
         }
+    }
+
+    private func accept(_ value: ShortcutBinding?) {
+        guard let value else {
+            NSSound.beep()
+            button.title = "Add ⌃⌥⌘ or F-key"
+            return
+        }
+        shortcut = value
+        onShortcut?(value)
+        finishRecording()
     }
 
     private func finishRecording() {

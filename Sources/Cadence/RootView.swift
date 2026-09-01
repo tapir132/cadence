@@ -72,7 +72,9 @@ struct RootView: View {
                     ForEach(Array(model.shortcut.modifierGlyphs), id: \.self) { glyph in
                         KeyboardKey(text: String(glyph), dark: true)
                     }
-                    KeyboardKey(text: model.shortcut.keyLabel, dark: true)
+                    if !model.shortcut.keyLabel.isEmpty {
+                        KeyboardKey(text: model.shortcut.keyLabel, dark: true)
+                    }
                 }
             }
             .padding(18)

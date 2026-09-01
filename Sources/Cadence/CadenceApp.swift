@@ -59,18 +59,33 @@ final class GlobalHotKey {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var isDown = false
+    private var monitors: [Any] = []
+    private var heldModifiers: NSEvent.ModifierFlags = []
+    private var otherKeyPressed = false
 
     private func register() {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
         }
+        monitors.forEach { NSEvent.removeMonitor($0) }
+        monitors = []
+        heldModifiers = []
+        otherKeyPressed = false
         isRegistered = false
         guard let binding, !isSuspended else { return }
+        if let keyCode = binding.keyCode {
+            registerCarbonHotKey(keyCode: keyCode, binding: binding)
+        } else {
+            registerModifierChord()
+        }
+    }
+
+    private func registerCarbonHotKey(keyCode: UInt16, binding: ShortcutBinding) {
         installHandler()
         let hotKeyID = EventHotKeyID(signature: 0x4344_4E43, id: 1) // "CDNC"
         let status = RegisterEventHotKey(
-            UInt32(binding.keyCode),
+            UInt32(keyCode),
             binding.carbonModifiers,
             hotKeyID,
             GetEventDispatcherTarget(),
@@ -81,6 +96,40 @@ final class GlobalHotKey {
         if !isRegistered {
             NSLog("Cadence could not register the %@ hot key (OSStatus %d)", binding.displayText, status)
         }
+    }
+
+    /// Carbon cannot express a modifier-only chord, so those are observed with
+    /// event monitors and fire when the last modifier is released without any
+    /// other key having been pressed. Global monitors need Accessibility trust,
+    /// which typing into other apps already requires.
+    private func registerModifierChord() {
+        let flags: (NSEvent) -> Void = { [weak self] event in
+            self?.handleFlags(event.modifierFlags.intersection(ShortcutBinding.shortcutModifiers))
+        }
+        let keys: (NSEvent) -> Void = { [weak self] _ in self?.noteKeyDown() }
+        monitors = [
+            NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flags),
+            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { flags($0); return $0 },
+            NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: keys),
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { keys($0); return $0 }
+        ].compactMap { $0 }
+        isRegistered = monitors.count == 4
+    }
+
+    func handleFlags(_ current: NSEvent.ModifierFlags) {
+        if current.isEmpty {
+            if !otherKeyPressed, let binding, binding.isModifierOnly, heldModifiers == binding.modifiers {
+                onPress?()
+            }
+            heldModifiers = []
+            otherKeyPressed = false
+        } else {
+            heldModifiers.formUnion(current)
+        }
+    }
+
+    func noteKeyDown() {
+        otherKeyPressed = true
     }
 
     private func installHandler() {
