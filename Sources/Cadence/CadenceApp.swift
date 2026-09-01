@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 @main
@@ -42,13 +43,70 @@ struct CadenceApp: App {
     }
 }
 
+/// Carbon hot keys are delivered by the window server, so they work without
+/// Accessibility trust (which an ad-hoc-signed build loses on every rebuild)
+/// and the keystroke is consumed instead of also reaching the focused editor.
+/// `NSEvent` global monitors silently need that trust and cannot consume.
+@MainActor
+final class GlobalHotKey {
+    static let shared = GlobalHotKey()
+
+    var binding: ShortcutBinding? { didSet { register() } }
+    var isSuspended = false { didSet { register() } }
+    var onPress: (() -> Void)?
+    private(set) var isRegistered = false
+
+    private var hotKeyRef: EventHotKeyRef?
+    private var handlerRef: EventHandlerRef?
+    private var isDown = false
+
+    private func register() {
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+        isRegistered = false
+        guard let binding, !isSuspended else { return }
+        installHandler()
+        let hotKeyID = EventHotKeyID(signature: 0x4344_4E43, id: 1) // "CDNC"
+        let status = RegisterEventHotKey(
+            UInt32(binding.keyCode),
+            binding.carbonModifiers,
+            hotKeyID,
+            GetEventDispatcherTarget(),
+            0,
+            &hotKeyRef
+        )
+        isRegistered = status == noErr
+        if !isRegistered {
+            NSLog("Cadence could not register the %@ hot key (OSStatus %d)", binding.displayText, status)
+        }
+    }
+
+    private func installHandler() {
+        guard handlerRef == nil else { return }
+        let specs = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
+        ]
+        InstallEventHandler(GetEventDispatcherTarget(), { _, event, _ in
+            let isPress = GetEventKind(event) == UInt32(kEventHotKeyPressed)
+            MainActor.assumeIsolated { GlobalHotKey.shared.handle(isPress: isPress) }
+            return noErr
+        }, specs.count, specs, nil, &handlerRef)
+    }
+
+    /// Holding the key auto-repeats press events; only the first press toggles.
+    private func handle(isPress: Bool) {
+        defer { isDown = isPress }
+        if isPress, !isDown { onPress?() }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var floatingPanel: FloatingPanelController?
     private var statusItem: NSStatusItem?
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
-    private var lastShortcutAt = Date.distantPast
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -57,7 +115,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureMainWindow()
         floatingPanel = FloatingPanelController(model: AppModel.shared)
         configureStatusItem()
-        installShortcutMonitors()
+        GlobalHotKey.shared.onPress = { AppModel.shared.toggleDictation() }
+        GlobalHotKey.shared.binding = AppModel.shared.shortcut
         AppModel.shared.refreshPermissions()
     }
 
@@ -103,27 +162,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.items.forEach { $0.target = self }
         item.menu = menu
         statusItem = item
-    }
-
-    private func installShortcutMonitors() {
-        let handler: (NSEvent) -> Void = { [weak self] event in
-            guard AppModel.shared.shortcut.matches(event) else { return }
-            self?.handleShortcut()
-        }
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if AppModel.shared.shortcut.matches(event) {
-                self?.handleShortcut()
-                return nil
-            }
-            return event
-        }
-    }
-
-    private func handleShortcut() {
-        guard Date().timeIntervalSince(lastShortcutAt) > 0.35 else { return }
-        lastShortcutAt = Date()
-        AppModel.shared.toggleDictation()
     }
 
     @objc private func openApp() {

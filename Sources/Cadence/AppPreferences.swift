@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 enum BarPlacement: String, CaseIterable, Codable, Identifiable {
@@ -42,8 +43,28 @@ struct ShortcutBinding: Codable, Equatable, Sendable {
         keyLabel: "Space"
     )
 
+    /// Caps Lock, Fn, and the numeric-pad flag describe keyboard state, not a
+    /// shortcut. Comparing them made ⌃⌥Space fail whenever Caps Lock was on.
+    static let shortcutModifiers: NSEvent.ModifierFlags = [.control, .option, .shift, .command]
+
+    static let functionKeyLabels: [UInt16: String] = [
+        122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6",
+        98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12",
+        105: "F13", 107: "F14", 113: "F15", 106: "F16", 64: "F17", 79: "F18",
+        80: "F19", 90: "F20"
+    ]
+
     var modifiers: NSEvent.ModifierFlags {
-        NSEvent.ModifierFlags(rawValue: modifiersRawValue).intersection(.deviceIndependentFlagsMask)
+        NSEvent.ModifierFlags(rawValue: modifiersRawValue).intersection(Self.shortcutModifiers)
+    }
+
+    var carbonModifiers: UInt32 {
+        var flags: UInt32 = 0
+        if modifiers.contains(.control) { flags |= UInt32(controlKey) }
+        if modifiers.contains(.option) { flags |= UInt32(optionKey) }
+        if modifiers.contains(.shift) { flags |= UInt32(shiftKey) }
+        if modifiers.contains(.command) { flags |= UInt32(cmdKey) }
+        return flags
     }
 
     var displayText: String {
@@ -59,14 +80,12 @@ struct ShortcutBinding: Codable, Equatable, Sendable {
         return text
     }
 
-    func matches(_ event: NSEvent) -> Bool {
-        event.keyCode == keyCode &&
-            event.modifierFlags.intersection(.deviceIndependentFlagsMask) == modifiers
-    }
-
+    /// Function keys are valid on their own; any other key needs ⌃, ⌥, or ⌘ so
+    /// ordinary typing can never trigger dictation.
     static func from(_ event: NSEvent) -> ShortcutBinding? {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard !modifiers.intersection([.control, .option, .command]).isEmpty else { return nil }
+        let modifiers = event.modifierFlags.intersection(shortcutModifiers)
+        let isFunctionKey = functionKeyLabels[event.keyCode] != nil
+        guard isFunctionKey || !modifiers.intersection([.control, .option, .command]).isEmpty else { return nil }
         return ShortcutBinding(
             keyCode: event.keyCode,
             modifiersRawValue: modifiers.rawValue,
@@ -80,12 +99,7 @@ struct ShortcutBinding: Codable, Equatable, Sendable {
             115: "Home", 116: "Page Up", 117: "Forward Delete", 119: "End",
             121: "Page Down", 123: "←", 124: "→", 125: "↓", 126: "↑"
         ]
-        if let label = special[event.keyCode] { return label }
-        let functionKeys: [UInt16: String] = [
-            122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6",
-            98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12"
-        ]
-        if let label = functionKeys[event.keyCode] { return label }
+        if let label = special[event.keyCode] ?? functionKeyLabels[event.keyCode] { return label }
         return event.charactersIgnoringModifiers?.uppercased() ?? "Key \(event.keyCode)"
     }
 }
@@ -114,13 +128,17 @@ struct ShortcutRecorder: NSViewRepresentable {
     }
 }
 
+/// Recording reads keys through a local event monitor instead of first-responder
+/// `keyDown`, so menu key equivalents, SwiftUI focus, and the enclosing scroll
+/// view never see the pressed keys. The global hot key is suspended meanwhile so
+/// re-recording the current shortcut cannot toggle dictation.
 final class ShortcutRecorderNSView: NSView {
     var onShortcut: ((ShortcutBinding) -> Void)?
     var shortcut: ShortcutBinding = .standard { didSet { updateTitle() } }
     private let button = NSButton(title: "", target: nil, action: nil)
-    private var isRecording = false
+    private var monitor: Any?
+    private var isRecording: Bool { monitor != nil }
 
-    override var acceptsFirstResponder: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: 148, height: 32) }
 
     override init(frame frameRect: NSRect) {
@@ -137,35 +155,36 @@ final class ShortcutRecorderNSView: NSView {
 
     override func layout() { button.frame = bounds }
 
-    override func keyDown(with event: NSEvent) {
-        guard isRecording else { return super.keyDown(with: event) }
-        if event.keyCode == 53 {
-            finishRecording()
-            return
-        }
-        guard let value = ShortcutBinding.from(event) else {
-            NSSound.beep()
-            button.title = "Add ⌃, ⌥, or ⌘"
-            return
-        }
-        shortcut = value
-        onShortcut?(value)
-        finishRecording()
-    }
-
-    override func resignFirstResponder() -> Bool {
-        finishRecording()
-        return super.resignFirstResponder()
-    }
-
     @objc private func beginRecording() {
-        isRecording = true
+        guard !isRecording else { return }
         button.title = "Press shortcut…"
-        window?.makeFirstResponder(self)
+        GlobalHotKey.shared.isSuspended = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            guard event.type == .keyDown else {
+                finishRecording()
+                return event
+            }
+            if event.keyCode == 53 {
+                finishRecording()
+                return nil
+            }
+            guard let value = ShortcutBinding.from(event) else {
+                NSSound.beep()
+                button.title = "Add ⌃⌥⌘ or F-key"
+                return nil
+            }
+            shortcut = value
+            onShortcut?(value)
+            finishRecording()
+            return nil
+        }
     }
 
     private func finishRecording() {
-        isRecording = false
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        GlobalHotKey.shared.isSuspended = false
         updateTitle()
     }
 

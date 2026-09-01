@@ -145,7 +145,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Your first words will land here")
                     .font(.system(size: 14, weight: .semibold))
-                Text("Focus an editor, then press Control–Option–Space.")
+                Text("Focus an editor, then press \(model.shortcut.displayText).")
                     .font(.system(size: 12)).foregroundStyle(CadenceTheme.muted)
             }
             Spacer()

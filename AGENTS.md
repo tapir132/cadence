@@ -33,6 +33,12 @@ panel.animator().setFrame(
 
 When debugging similar failures, separately verify event tracking, destination calculation, the final window API call, animation completion, and the resulting on-screen frame.
 
+## Regression lesson: global shortcut
+
+`NSEvent.addGlobalMonitorForEvents` only delivers key events when the process is trusted for Accessibility, and it never consumes the keystroke. An ad-hoc code signature's designated requirement is its `cdhash`, so every rebuild or update silently invalidates that trust while System Settings still shows the toggle enabled. The shortcut then does nothing with no error anywhere.
+
+Register the shortcut with Carbon `RegisterEventHotKey` instead: the window server delivers it without Accessibility trust, it fires whether or not Cadence is active, and the focused editor never receives the key. Verify a shortcut change by pressing it from another application, not by checking that the binding was saved.
+
 ## Release verification
 
 - Run the complete test suite with warnings treated as errors.

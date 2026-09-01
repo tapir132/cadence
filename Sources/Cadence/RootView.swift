@@ -69,9 +69,10 @@ struct RootView: View {
                         .foregroundStyle(Color.white.opacity(0.68))
                 }
                 HStack(spacing: 4) {
-                    KeyboardKey(text: "⌃", dark: true)
-                    KeyboardKey(text: "⌥", dark: true)
-                    KeyboardKey(text: "Space", dark: true)
+                    ForEach(Array(model.shortcut.modifierGlyphs), id: \.self) { glyph in
+                        KeyboardKey(text: String(glyph), dark: true)
+                    }
+                    KeyboardKey(text: model.shortcut.keyLabel, dark: true)
                 }
             }
             .padding(18)

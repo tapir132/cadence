@@ -85,6 +85,8 @@ struct SettingsView: View {
                         Text("Start or stop from any app").font(.system(size: 13, weight: .semibold))
                         Text("Keep your cursor in the document; Cadence stays out of the way.")
                             .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        Text("Function keys work on their own. Hold fn if your keyboard uses them for volume and brightness.")
+                            .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                     }
                     Spacer()
                     ShortcutRecorder(shortcut: $model.shortcut)

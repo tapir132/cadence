@@ -42,7 +42,12 @@ final class AppModel: ObservableObject {
     @Published var selectedSection: SidebarSection = .home
     @Published var dictionary: [String] = [] { didSet { persistDictionary() } }
     @Published var useOnDeviceRecognition = true
-    @Published var shortcut: ShortcutBinding = .standard { didSet { saveSettings() } }
+    @Published var shortcut: ShortcutBinding = .standard {
+        didSet {
+            saveSettings()
+            GlobalHotKey.shared.binding = shortcut
+        }
+    }
     @Published var barPlacement: BarPlacement = .bottom { didSet { saveSettings() } }
     @Published var barScale = 0.85 { didSet { saveSettings() } }
     @Published private(set) var freeBarX = 0.5
