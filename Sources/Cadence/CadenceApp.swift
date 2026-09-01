@@ -54,14 +54,13 @@ final class GlobalHotKey {
     var binding: ShortcutBinding? { didSet { register() } }
     var isSuspended = false { didSet { register() } }
     var onPress: (() -> Void)?
+    var onRelease: (() -> Void)?
     private(set) var isRegistered = false
 
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var isDown = false
     private var monitors: [Any] = []
-    private var heldModifiers: NSEvent.ModifierFlags = []
-    private var otherKeyPressed = false
 
     private func register() {
         if let hotKeyRef {
@@ -70,8 +69,7 @@ final class GlobalHotKey {
         }
         monitors.forEach { NSEvent.removeMonitor($0) }
         monitors = []
-        heldModifiers = []
-        otherKeyPressed = false
+        isDown = false
         isRegistered = false
         guard let binding, !isSuspended else { return }
         if let keyCode = binding.keyCode {
@@ -99,37 +97,37 @@ final class GlobalHotKey {
     }
 
     /// Carbon cannot express a modifier-only chord, so those are observed with
-    /// event monitors and fire when the last modifier is released without any
-    /// other key having been pressed. Global monitors need Accessibility trust,
-    /// which typing into other apps already requires.
+    /// event monitors. Global monitors need Accessibility trust, which typing
+    /// into other apps already requires.
     private func registerModifierChord() {
         let flags: (NSEvent) -> Void = { [weak self] event in
             self?.handleFlags(event.modifierFlags.intersection(ShortcutBinding.shortcutModifiers))
         }
-        let keys: (NSEvent) -> Void = { [weak self] _ in self?.noteKeyDown() }
         monitors = [
             NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flags),
-            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { flags($0); return $0 },
-            NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: keys),
-            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { keys($0); return $0 }
+            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { flags($0); return $0 }
         ].compactMap { $0 }
-        isRegistered = monitors.count == 4
+        isRegistered = monitors.count == 2
     }
 
+    /// A chord is down once exactly its modifiers are held, and up as soon as
+    /// any of them lifts. Reaching it through a larger combination never starts it.
     func handleFlags(_ current: NSEvent.ModifierFlags) {
-        if current.isEmpty {
-            if !otherKeyPressed, let binding, binding.isModifierOnly, heldModifiers == binding.modifiers {
-                onPress?()
-            }
-            heldModifiers = []
-            otherKeyPressed = false
-        } else {
-            heldModifiers.formUnion(current)
+        guard let binding, binding.isModifierOnly else { return }
+        if !isDown, current == binding.modifiers {
+            isDown = true
+            onPress?()
+        } else if isDown, !current.isSuperset(of: binding.modifiers) {
+            isDown = false
+            onRelease?()
         }
     }
 
-    func noteKeyDown() {
-        otherKeyPressed = true
+    /// Carbon repeats press events while the key is held; only edges matter.
+    func handleCarbon(isPress: Bool) {
+        guard isPress != isDown else { return }
+        isDown = isPress
+        if isPress { onPress?() } else { onRelease?() }
     }
 
     private func installHandler() {
@@ -140,15 +138,9 @@ final class GlobalHotKey {
         ]
         InstallEventHandler(GetEventDispatcherTarget(), { _, event, _ in
             let isPress = GetEventKind(event) == UInt32(kEventHotKeyPressed)
-            MainActor.assumeIsolated { GlobalHotKey.shared.handle(isPress: isPress) }
+            MainActor.assumeIsolated { GlobalHotKey.shared.handleCarbon(isPress: isPress) }
             return noErr
         }, specs.count, specs, nil, &handlerRef)
-    }
-
-    /// Holding the key auto-repeats press events; only the first press toggles.
-    private func handle(isPress: Bool) {
-        defer { isDown = isPress }
-        if isPress, !isDown { onPress?() }
     }
 }
 
@@ -164,7 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureMainWindow()
         floatingPanel = FloatingPanelController(model: AppModel.shared)
         configureStatusItem()
-        GlobalHotKey.shared.onPress = { AppModel.shared.toggleDictation() }
+        GlobalHotKey.shared.onPress = { AppModel.shared.shortcutPressed() }
+        GlobalHotKey.shared.onRelease = { AppModel.shared.shortcutReleased() }
         GlobalHotKey.shared.binding = AppModel.shared.shortcut
         AppModel.shared.refreshPermissions()
     }

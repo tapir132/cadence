@@ -82,8 +82,8 @@ struct SettingsView: View {
                 sectionTitle("Global shortcut").padding(.top, 34)
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Start or stop from any app").font(.system(size: 13, weight: .semibold))
-                        Text("Keep your cursor in the document; Cadence stays out of the way.")
+                        Text("Hold to talk from any app").font(.system(size: 13, weight: .semibold))
+                        Text("Hold the shortcut while you speak and release it to finish; Cadence stays out of the way.")
                             .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                         Text("Press a combination, a function key (hold fn if it controls volume), or tap modifier keys alone such as ⌃⌥ or ⌘.")
                             .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)

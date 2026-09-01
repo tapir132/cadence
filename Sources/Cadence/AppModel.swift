@@ -103,6 +103,24 @@ final class AppModel: ObservableObject {
         if isListening { stopDictation() } else { Task { await startDictation() } }
     }
 
+    /// Hold-to-talk: the shortcut starts dictation while held and stops it on
+    /// release, even when the release lands before the engine has started.
+    func shortcutPressed() {
+        shortcutHeld = true
+        guard !isListening else { return }
+        Task {
+            await startDictation()
+            if !shortcutHeld { stopDictation() }
+        }
+    }
+
+    func shortcutReleased() {
+        shortcutHeld = false
+        stopDictation()
+    }
+
+    private var shortcutHeld = false
+
     /// Starting from the Hub would otherwise leave Cadence as the key app and
     /// send synthetic keystrokes back into its own window. Hiding returns focus
     /// to the editor the user was working in before capture begins.

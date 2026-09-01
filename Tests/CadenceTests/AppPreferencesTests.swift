@@ -55,36 +55,56 @@ import Testing
 }
 
 @MainActor
-@Test func modifierOnlyHotKeyFiresOnCleanReleaseOnly() throws {
+@Test func modifierChordPressesWhenCompleteAndReleasesWhenAnyModifierLifts() throws {
     let hotKey = GlobalHotKey.shared
-    var presses = 0
-    hotKey.onPress = { presses += 1 }
+    var events: [String] = []
+    hotKey.onPress = { events.append("press") }
+    hotKey.onRelease = { events.append("release") }
     let chord = try #require(ShortcutBinding.modifierOnly([.control, .option]))
     hotKey.binding = chord
     defer {
         hotKey.binding = nil
         hotKey.onPress = nil
+        hotKey.onRelease = nil
     }
     #expect(hotKey.isRegistered)
 
     hotKey.handleFlags([.control])
+    #expect(events.isEmpty)
     hotKey.handleFlags([.control, .option])
+    #expect(events == ["press"])
+    hotKey.handleFlags([.control, .option, .shift])
+    #expect(events == ["press"])
     hotKey.handleFlags([.option])
+    #expect(events == ["press", "release"])
     hotKey.handleFlags([])
-    #expect(presses == 1)
+    #expect(events == ["press", "release"])
 
-    // ⌃⌥ + another key is a different shortcut, not a chord tap.
-    hotKey.handleFlags([.control, .option])
-    hotKey.noteKeyDown()
-    hotKey.handleFlags([])
-    #expect(presses == 1)
-
-    // A different or larger chord never fires.
-    hotKey.handleFlags([.command])
-    hotKey.handleFlags([])
+    // Reaching the chord through a larger combination never starts it.
     hotKey.handleFlags([.control, .option, .command])
     hotKey.handleFlags([])
-    #expect(presses == 1)
+    #expect(events == ["press", "release"])
+}
+
+@MainActor
+@Test func carbonHotKeyIgnoresAutoRepeatAndReportsRelease() {
+    let hotKey = GlobalHotKey.shared
+    var events: [String] = []
+    hotKey.onPress = { events.append("press") }
+    hotKey.onRelease = { events.append("release") }
+    hotKey.binding = .standard
+    defer {
+        hotKey.binding = nil
+        hotKey.onPress = nil
+        hotKey.onRelease = nil
+    }
+
+    hotKey.handleCarbon(isPress: true)
+    hotKey.handleCarbon(isPress: true)
+    hotKey.handleCarbon(isPress: true)
+    hotKey.handleCarbon(isPress: false)
+    hotKey.handleCarbon(isPress: false)
+    #expect(events == ["press", "release"])
 }
 
 @MainActor
