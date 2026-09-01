@@ -68,6 +68,14 @@ struct SnapGeometryTests {
     }
 
     @MainActor
+    @Test func deliveredDictationStateSelectsTheExpandedMode() {
+        #expect(mode(state: .idle) == .collapsed(.bottom))
+        #expect(mode(state: .listening) == .listening)
+        #expect(mode(state: .finishing) == .listening)
+        #expect(mode(state: .error("Stopped")) == .error)
+    }
+
+    @MainActor
     @Test func appKitTrackingEventsReachTheHoverCallback() throws {
         let view = FloatingInteractionView(rootView: EmptyView())
         var hoverStates: [Bool] = []
@@ -141,6 +149,18 @@ struct SnapGeometryTests {
             placement: placement,
             freeX: x,
             freeY: y
+        )
+    }
+
+    @MainActor
+    private func mode(state: DictationState) -> FloatingBarMode {
+        FloatingBarPresentation.mode(
+            state: state,
+            isHovered: false,
+            isDragging: false,
+            placement: .bottom,
+            freeX: 0.5,
+            freeY: 0
         )
     }
 

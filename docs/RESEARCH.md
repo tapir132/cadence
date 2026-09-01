@@ -1,6 +1,6 @@
 # Research and architecture
 
-Research rechecked on August 31, 2026. Cadence supports macOS 14 and later. The recognition pipeline, final AppKit delivery call, and installed application artifact are evaluated separately because correct intermediate state does not prove that an editor displayed the text.
+Research rechecked on September 1, 2026. Cadence supports macOS 14 and later. The recognition pipeline, final AppKit delivery call, and installed application artifact are evaluated separately because correct intermediate state does not prove that an editor displayed the text.
 
 ## What the repeated failure revealed
 
@@ -29,9 +29,9 @@ Live essay dictation needs a narrower guarantee than “every partial is final�
 - continue the same held session with the next sentence;
 - keep accepting audio for long sessions without task expiry or callback reordering.
 
-The new pipeline uses [FluidAudio's pinned Parakeet Unified streaming manager](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/ASR/Parakeet/Unified/StreamingUnifiedAsrManager.swift). Unlike the former Apple partial-result path, this manager builds its transcript by appending decoded RNNT emissions to a cache and is designed to run for hours. Cadence selects its `[70,2,2]` tier: 160 ms of new audio plus 160 ms of right context, or 320 ms theoretical model latency.
+The new pipeline uses [FluidAudio's pinned Parakeet Unified streaming manager](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/ASR/Parakeet/Unified/StreamingUnifiedAsrManager.swift). Unlike the former Apple partial-result path, this manager builds its transcript by appending decoded RNNT emissions to a cache and is designed to run for hours. Cadence exposes two exports of the same English 0.6B checkpoint: Fast `[70,2,2]` uses 160 ms of new audio plus 160 ms of right context (320 ms theoretical latency); Accurate `[70,7,7]` uses 560 ms plus 560 ms (1.12 s latency).
 
-The pinned [Unified benchmark](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/ASR/Parakeet/Unified/benchmark.md) reports 2.37% aggregate WER and roughly 10× real-time throughput for that tier on its 150-file LibriSpeech comparison. These corpus figures are useful for selecting a latency tier, not a promise for microphones, accents, names, or essay prose.
+The pinned [Unified benchmark](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/ASR/Parakeet/Unified/benchmark.md) reports 2.37% aggregate WER for Fast and 2.25% for Accurate on the same 150-file LibriSpeech comparison. The difference is modest; Accurate is a larger-context profile, not a different or magically stronger language model. These corpus figures guide a latency tradeoff and are not a promise for microphones, accents, names, or essay prose.
 
 ### Stable word emission
 
@@ -41,18 +41,23 @@ Committed words are inserted without trailing whitespace; the next committed wor
 
 Apple's [macOS dictation command reference](https://support.apple.com/guide/mac-help/mh40695/mac) treats spoken punctuation names as commands. Cadence applies `period`, `full stop`, and `question mark` to each streaming hypothesis before stabilization. Therefore the command can change while it is still preview-only, and only the resulting symbol is ever committed to the editor.
 
+The personal dictionary runs at the same pre-insertion stage. Case- and diacritic-insensitive exact matches restore the saved spelling. A possible multiword dictionary prefix remains provisional until it completes or stops matching, so `Jose Arcadio Buendia` can safely become `José Arcadio Buendía` without revising visible text. The optional cleanup toggle removes only standalone hesitation sounds such as `um`, `uh`, `erm`, and `er`; arbitrary prose rewriting is deliberately excluded from this append-only path.
+
 ### Pause finalization and continuous rollover
 
 [FluidAudio's Silero streaming VAD](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/VAD/VadManager%2BStreaming.swift) uses hysteresis and a default 750 ms minimum silence duration. Cadence uses its speech-start signal to keep leading background silence out of ASR while retaining a short pre-roll so the first phoneme is not clipped.
 
-On speech end, Cadence:
+The 750 ms VAD event means “speech paused,” not “the thought is grammatically complete.” Treating those concepts as identical produced `Because my Apple dictation. Was messing…`. A minimal model experiment fed those phrases through one uninterrupted Unified stream with 1.5 seconds of silence; it returned `Because my Apple dictation was messing…`, preserving the intended context and capitalization.
+
+On speech end, Cadence now:
 
 1. feeds the trailing silence through Parakeet's right-context window;
-2. calls `finish()` to expose the sentence tail and model punctuation;
-3. supplies terminal punctuation if end-of-stream still omitted it;
-4. inserts the remaining safe delta;
-5. calls `reset()` on decoder stream state while keeping Core ML models loaded;
-6. continues consuming audio under the same held shortcut.
+2. inserts the held tail immediately without forcing punctuation;
+3. classifies the formatted fragment as complete, continuing, or uncertain;
+4. closes immediately when the live model or a spoken command supplied terminal punctuation;
+5. preserves the same decoder stream for a clear dependent clause;
+6. gives an uncertain fragment two more VAD blocks (about 512 ms) in which speech can resume before finalizing it as a sentence;
+7. resets decoder state only after a real sentence boundary, keeping the Core ML models loaded and the held shortcut active.
 
 Releasing the shortcut flushes the active final segment in the same way. Audio tap buffers enter one ordered `AsyncStream`; a single actor consumes them, so independent tasks cannot reorder buffers or race the Core ML decoder.
 
@@ -62,7 +67,8 @@ Releasing the shortcut flushes the active final segment in the same way. Audio t
 |---|---|---|
 | Apple `SFSpeechRecognizer` partials | Convenient live API, but its partial hypotheses are revisable and the observed task lifecycle stranded text after pauses. | Removed from the dictation path. |
 | Apple `SpeechAnalyzer` / `SpeechTranscriber` | Apple's [WWDC25 session](https://developer.apple.com/videos/play/wwdc2025/277/) describes newer live transcription with volatile and finalized ranges. | Future benchmark; it requires macOS 26, above Cadence's current deployment floor. |
-| Parakeet Unified 0.6B | Native low-latency streaming, punctuation/capitalization, a 320 ms tier, and strong English benchmark results through FluidAudio/Core ML. | Selected. |
+| Parakeet Unified 0.6B | Native streaming, punctuation/capitalization, a 320 ms low-latency tier, and a slightly more accurate 1.12 s context tier through FluidAudio/Core ML. | Selected with a Fast/Accurate profile control. |
+| Nemotron Speech Streaming 0.6B | A credible local alternative, but the pinned evidence did not establish a reliable advantage over Unified for Cadence's punctuation-heavy append-only English path. | Revisit with an app-specific corpus rather than adding a misleading “stronger model” label. |
 | Parakeet TDT whole-utterance inference | Accurate locally, but produces nothing while the user is speaking. | Rejected because live insertion is a core product requirement. |
 | Whisper through a native Core ML runtime | Mature multilingual alternative, but no advantage was established for the current English-first, low-latency path. | Keep as a future multilingual benchmark. |
 
@@ -86,7 +92,7 @@ After the queue drains, Cadence checks accessible text or cursor movement when t
 
 Wispr Flow's advantage is not only raw ASR. Its [context-awareness documentation](https://docs.wisprflow.ai/articles/4678293671-Context-Awareness) says it uses the active application and limited text near the cursor to adapt vocabulary, style, and formatting. Its [privacy/cloud documentation](https://docs.wisprflow.ai/articles/4709791908-understanding-privacy-mode-and-cloud-sync) describes cloud processing and personalized models.
 
-Cadence now has a low-latency local streaming baseline, but it does not claim parity with that cloud/context pipeline. It deliberately does not read the surrounding essay, upload microphone audio, or run an LLM rewrite. The personal dictionary preserves exact casing only for terms the acoustic model already decoded; fuzzy substitution is avoided because it can invent words without acoustic evidence.
+Cadence now has a low-latency local streaming baseline, but it does not claim parity with that cloud/context pipeline. It deliberately does not read the surrounding essay, upload microphone audio, or run an LLM rewrite. Its local boundary classifier considers the recognized fragment and pause duration, and its optional cleanup removes filler sounds before insertion. The personal dictionary restores exact case and diacritics only for the same decoded letters; fuzzy substitution is avoided because it can invent words without acoustic evidence.
 
 ## Native architecture
 
@@ -97,7 +103,7 @@ AVAudioEngine tap
 AudioCaptureEngine ── resample to 16 kHz mono ── AsyncStream
       │
       ▼
-Silero VAD ── speech start / 750 ms speech-end pause
+Silero VAD ── speech start / 750 ms speech-pause signal
       │
       ▼
 Parakeet Unified streaming decoder
@@ -105,7 +111,8 @@ Parakeet Unified streaming decoder
       ▼
 LiveTranscriptEmitter
       ├── preview: complete partial, including frontier word
-      └── insertion: completed-word deltas only
+      ├── pause classifier: complete / continuation / uncertain
+      └── insertion: completed-word deltas and pause tail only
                │
                ▼
 KeystrokeInjector (one serialized paste queue)
@@ -123,7 +130,7 @@ TextInsertionVerifier ── definite failure → recovery card
 
 ## Verification
 
-The opt-in production regression synthesizes two spoken sentences and drives the real ASR/VAD pipeline in microphone-sized chunks. It supplies sentence one plus two seconds of silence, then requires the last word and period in both the live transcript and accumulated insertion deltas before sentence-two audio is allowed into the stream. It then supplies sentence two, verifies continuous rollover and final punctuation, and requires all append-only deltas to reconstruct the final transcript exactly.
+The opt-in production regressions synthesize speech and drive the real ASR/VAD pipeline in microphone-sized chunks. One supplies a complete sentence plus two seconds of silence, requires its last word and period before later audio enters, repeats rollover five times, and requires every append-only delta to reconstruct the final transcript. A second reproduces `Because my Apple dictation` plus a 1.5-second pause followed by `was messing that up for my summer reading`; it requires the first tail to become visible without sentence punctuation and the final result to remain one continuous sentence.
 
 A separate regression reuses one `AVAudioConverter` over sixty consecutive tap buffers. Its input provider returns `.noDataNow` after supplying each buffer; returning `.endOfStream` would terminally close that reusable converter and recreate the observed “works at first, then stops” failure.
 
@@ -138,7 +145,8 @@ The provisional-tail regression reproduces the observed `…like 0.` → `…lik
 - English first; the Unified checkpoint is English-only.
 - A one-time ASR/VAD model download and compilation is required before dictation becomes ready.
 - Words appear after a following boundary confirms they are complete, so preview text can lead editor text by roughly one word.
-- A sentence-ending pause is approximately 750 ms, after which Cadence commits punctuation and starts a fresh decoder segment without ending the shortcut session.
-- No cloud LLM cleanup, accounts, sync, document-context reading, or audio retention.
+- Tail words flush after approximately 750 ms of silence. Terminal punctuation can take up to roughly another 512 ms for an uncertain boundary; a clear dependent clause remains open for the next phrase or shortcut release.
+- Filler cleanup is conservative. Cadence cannot safely interpret free-form corrections such as “forget that” after the referenced words have already been inserted without introducing an editor-revision path.
+- No cloud LLM rewrite, accounts, sync, document-context reading, or audio retention.
 - The transcript remains on the clipboard after insertion, favoring recoverability over transparent clipboard restoration.
 - Secure fields and applications that reject synthetic shortcuts may still refuse insertion; Cadence preserves the transcript and reports definite failures.

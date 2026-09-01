@@ -28,49 +28,101 @@ enum SpeechModelStatus: Equatable {
     case failed(String)
 }
 
+extension RecognitionProfile {
+    var unifiedConfig: UnifiedConfig {
+        switch self {
+        case .fast:
+            UnifiedConfig(leftFrames: 70, chunkFrames: 2, rightFrames: 2)
+        case .accurate:
+            UnifiedConfig(leftFrames: 70, chunkFrames: 7, rightFrames: 7)
+        }
+    }
+}
+
 /// Owns the append-only Parakeet Unified decoder and Silero voice-activity
-/// detector. Speech is decoded continuously; a sustained pause flushes the
-/// current decoder's right context (including punctuation), resets only its
-/// lightweight stream state, and immediately continues with the next sentence.
+/// detector. A pause flushes the visible tail immediately. Cadence preserves
+/// the decoder stream for a grammatical continuation and closes it only at a
+/// sentence boundary, retaining language context across mid-sentence pauses.
 actor LiveSpeechTranscriber {
     private static let vadChunkSize = VadManager.chunkSize
     private static let preRollSampleCount = VadManager.chunkSize * 2
+    // Silero has already observed sustained silence before it reports an end.
+    // Two additional blocks keep a brief mid-thought hesitation open without
+    // making sentence punctuation lag noticeably behind the visible tail.
+    private static let uncertainPauseGraceSamples = VadManager.chunkSize * 2
+
+    private struct PreparedModels: Sendable {
+        let manager: StreamingUnifiedAsrManager
+        let vad: VadManager
+    }
+
+    private struct ModelPreparation {
+        let id: UUID
+        let profile: RecognitionProfile
+        let task: Task<PreparedModels, Error>
+    }
 
     private var manager: StreamingUnifiedAsrManager?
     private var vad: VadManager?
-    private var preparationTask: Task<Void, Error>?
+    private var loadedProfile: RecognitionProfile?
+    private var preparation: ModelPreparation?
 
-    func prepare(onProgress: @escaping @Sendable (Double?) -> Void) async throws {
-        if manager != nil, vad != nil { return }
-        if let preparationTask {
-            try await preparationTask.value
-            return
+    func prepare(
+        profile: RecognitionProfile = .fast,
+        onProgress: @escaping @Sendable (Double?) -> Void
+    ) async throws {
+        if manager != nil, vad != nil, loadedProfile == profile { return }
+        if let preparation {
+            try await complete(preparation)
+            if manager != nil, vad != nil, loadedProfile == profile { return }
         }
 
-        let task = Task { [weak self] in
+        let existingVad = vad
+        let task = Task {
+            let modelWeight = existingVad == nil ? 0.92 : 1.0
             let manager = StreamingUnifiedAsrManager(
-                config: UnifiedConfig(leftFrames: 70, chunkFrames: 2, rightFrames: 2)
+                config: profile.unifiedConfig
             )
             try await manager.loadModels(progressHandler: { progress in
-                onProgress(progress.fractionCompleted * 0.92)
+                onProgress(progress.fractionCompleted * modelWeight)
             })
-            let vad = try await VadManager(progressHandler: { progress in
-                onProgress(0.92 + progress.fractionCompleted * 0.08)
-            })
-            await self?.install(manager: manager, vad: vad)
+            let preparedVad: VadManager
+            if let existingVad {
+                preparedVad = existingVad
+            } else {
+                preparedVad = try await VadManager(progressHandler: { progress in
+                    onProgress(0.92 + progress.fractionCompleted * 0.08)
+                })
+            }
+            return PreparedModels(manager: manager, vad: preparedVad)
         }
-        preparationTask = task
+        let pending = ModelPreparation(id: UUID(), profile: profile, task: task)
+        preparation = pending
+        try await complete(pending)
+    }
+
+    private func complete(_ pending: ModelPreparation) async throws {
         do {
-            try await task.value
-            preparationTask = nil
+            let prepared = try await pending.task.value
+            guard preparation?.id == pending.id else { return }
+            let previousManager = manager
+            manager = prepared.manager
+            vad = prepared.vad
+            loadedProfile = pending.profile
+            preparation = nil
+            if let previousManager, previousManager !== prepared.manager {
+                await previousManager.cleanup()
+            }
         } catch {
-            preparationTask = nil
+            if preparation?.id == pending.id { preparation = nil }
             throw error
         }
     }
 
     func transcribe(
         _ audio: AsyncStream<[Float]>,
+        cleanupEnabled: Bool = false,
+        dictionaryTerms: [String] = [],
         onUpdate: @escaping @Sendable (LiveTranscriptUpdate) async -> Void
     ) async throws -> String {
         guard let manager, let vad else {
@@ -78,11 +130,16 @@ actor LiveSpeechTranscriber {
         }
 
         try await manager.reset()
-        var emitter = LiveTranscriptEmitter()
+        var emitter = LiveTranscriptEmitter(
+            cleanupEnabled: cleanupEnabled,
+            dictionaryTerms: dictionaryTerms
+        )
         var vadState = VadStreamState.initial()
         var pendingSamples: [Float] = []
         var preRoll: [Float] = []
         var segmentActive = false
+        var pendingBoundary: PauseBoundaryDecision?
+        var pendingSilenceSamples = 0
 
         do {
             for await samples in audio {
@@ -98,6 +155,8 @@ actor LiveSpeechTranscriber {
                         vadState: &vadState,
                         preRoll: &preRoll,
                         segmentActive: &segmentActive,
+                        pendingBoundary: &pendingBoundary,
+                        pendingSilenceSamples: &pendingSilenceSamples,
                         emitter: &emitter,
                         onUpdate: onUpdate
                     )
@@ -122,13 +181,15 @@ actor LiveSpeechTranscriber {
                         vadState: &vadState,
                         preRoll: &preRoll,
                         segmentActive: &segmentActive,
+                        pendingBoundary: &pendingBoundary,
+                        pendingSilenceSamples: &pendingSilenceSamples,
                         emitter: &emitter,
                         onUpdate: onUpdate
                     )
                 }
             }
 
-            if segmentActive {
+            if segmentActive || emitter.hasOpenSegment {
                 try await finalizeSegment(
                     manager: manager,
                     emitter: &emitter,
@@ -154,6 +215,8 @@ actor LiveSpeechTranscriber {
         vadState: inout VadStreamState,
         preRoll: inout [Float],
         segmentActive: inout Bool,
+        pendingBoundary: inout PauseBoundaryDecision?,
+        pendingSilenceSamples: inout Int,
         emitter: inout LiveTranscriptEmitter,
         onUpdate: @escaping @Sendable (LiveTranscriptUpdate) async -> Void
     ) async throws {
@@ -169,6 +232,8 @@ actor LiveSpeechTranscriber {
                 preRoll.removeFirst(preRoll.count - Self.preRollSampleCount)
             }
             if result.event?.isStart == true || result.state.triggered {
+                pendingBoundary = nil
+                pendingSilenceSamples = 0
                 segmentActive = true
                 let bufferedSpeech = preRoll
                 preRoll.removeAll(keepingCapacity: true)
@@ -178,17 +243,42 @@ actor LiveSpeechTranscriber {
                     emitter: &emitter,
                     onUpdate: onUpdate
                 )
+            } else if pendingBoundary == .uncertain {
+                pendingSilenceSamples += chunk.count
+                if pendingSilenceSamples >= Self.uncertainPauseGraceSamples {
+                    try await finalizeSegment(
+                        manager: manager,
+                        emitter: &emitter,
+                        continuesAfterPause: true,
+                        onUpdate: onUpdate
+                    )
+                    try await manager.reset()
+                    pendingBoundary = nil
+                    pendingSilenceSamples = 0
+                }
             }
         }
 
         if result.event?.isEnd == true, segmentActive {
-            try await finalizeSegment(
-                manager: manager,
-                emitter: &emitter,
-                continuesAfterPause: true,
-                onUpdate: onUpdate
-            )
-            try await manager.reset()
+            let partial = await manager.getPartialTranscript()
+            let boundary = emitter.pauseBoundaryDecision(for: partial)
+            switch boundary {
+            case .complete:
+                try await finalizeSegment(
+                    manager: manager,
+                    emitter: &emitter,
+                    continuesAfterPause: true,
+                    onUpdate: onUpdate
+                )
+                try await manager.reset()
+                pendingBoundary = nil
+            case .continuation, .uncertain:
+                if let update = try emitter.flushPauseTail(partial) {
+                    await onUpdate(update)
+                }
+                pendingBoundary = boundary
+            }
+            pendingSilenceSamples = 0
             segmentActive = false
             preRoll.removeAll(keepingCapacity: true)
         }
@@ -220,11 +310,6 @@ actor LiveSpeechTranscriber {
         if let update = try emitter.finalize(final, continuesAfterPause: continuesAfterPause) {
             await onUpdate(update)
         }
-    }
-
-    private func install(manager: StreamingUnifiedAsrManager, vad: VadManager) {
-        self.manager = manager
-        self.vad = vad
     }
 
     private nonisolated static func audioBuffer(_ samples: [Float]) throws -> AVAudioPCMBuffer {

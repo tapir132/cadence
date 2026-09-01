@@ -1,15 +1,17 @@
 # Cadence
 
-Cadence is a native macOS dictation app that transcribes locally and types completed words live into the focused application. It keeps only the unfinished frontier word provisional, commits the sentence tail and punctuation on a pause, and continues listening until the shortcut is released.
+Cadence is a native macOS dictation app that transcribes locally and types completed words live into the focused application. It keeps only the unfinished frontier word provisional, flushes the tail on a pause, and uses punctuation, grammar, and pause length to decide whether the sentence is actually over.
 
 ## Features
 
 - Live on-device English transcription with NVIDIA Parakeet Unified 0.6B through FluidAudio
-- Append-only word emission with sentence finalization after a sustained pause
+- Append-only word emission with context-aware sentence boundaries after a pause
 - Continuous pause rollover, including punctuation and speech in later sentences
+- Fast (320 ms) and Accurate (1.12 s) local recognition profiles
+- Optional filler-word cleanup for hesitation sounds such as “um” and “uh”
 - Serialized standard clipboard pastes instead of lossy per-character Unicode events
 - Focus-bound delivery that refuses to paste after the user changes windows
-- Personal dictionary capitalization for names, acronyms, and specialized vocabulary
+- Personal dictionary spelling, capitalization, and diacritics for names and specialized vocabulary
 - Configurable global keyboard shortcut
 - Edge-aware idle handle that expands on hover or while dictating
 - Eight edge snap points, Command-drag free positioning, and adjustable sizing
@@ -25,7 +27,7 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Microphone access
 - Accessibility access for pasting into other applications
 
-The current release build is optimized for Apple Silicon. On first launch Cadence downloads and prepares the English speech and voice-activity models (roughly 600 MB total); later transcription runs locally without sending microphone audio to a speech service.
+The current release build is optimized for Apple Silicon. On first launch Cadence downloads and prepares the English speech and voice-activity models (roughly 600 MB total); later transcription runs locally without sending microphone audio to a speech service. Selecting Accurate downloads one additional local encoder the first time it is used.
 
 ## Build and run
 
@@ -59,9 +61,11 @@ The floating bar can stop or cancel dictation without activating the main Cadenc
 
 ## How dictation works
 
-Cadence captures 16 kHz mono audio for as long as the shortcut is held. Silero voice-activity detection prevents leading silence from reaching the recognizer and identifies a sustained sentence pause. Parakeet Unified streams partial hypotheses with 320 ms model latency. Cadence holds the unfinished last word—and its punctuation—until a following boundary or sentence pause confirms it. Safe completed words are inserted immediately.
+Cadence captures 16 kHz mono audio for as long as the shortcut is held. Silero voice-activity detection prevents leading silence from reaching the recognizer and identifies a sustained pause. Parakeet Unified streams partial hypotheses with 320 ms model latency in Fast or 1.12 s in Accurate. Cadence holds the unfinished last word—and its punctuation—until a following boundary or pause confirms it. Safe completed words are inserted immediately.
 
-After about 750 ms of speech-ending silence, Cadence flushes the decoder's final right-context window, inserts the sentence tail and punctuation, resets only streaming decoder state, and keeps the same held dictation session alive for the next sentence. Releasing the shortcut performs the same final flush for the last sentence.
+After about 750 ms of speech-ending silence, Cadence inserts the sentence tail and classifies the boundary. Explicit or model-supplied terminal punctuation closes immediately. A dependent clause such as “Because my Apple dictation…” keeps the same decoder stream and language context when speech resumes. An uncertain fragment gets a short grace window; if silence continues, Cadence closes it with punctuation and starts a fresh stream without ending the held shortcut. Releasing the shortcut finalizes any open thought.
+
+Personal-dictionary matching occurs before text becomes visible. Cadence can therefore hold a possible multiword name briefly and safely restore exact case and diacritics—for example, `Jose Arcadio Buendia` to `José Arcadio Buendía`—without editing text after it was pasted. Optional filler-word cleanup also runs at this pre-insertion stage. It is intentionally conservative and does not rewrite earlier prose or interpret “forget that” as a destructive edit.
 
 Each safe text delta is written to the pasteboard and delivered with a complete physical Command-down, V-down, V-up, Command-up sequence. Paste operations are serialized so a later word cannot replace the pasteboard before the focused editor consumes the previous one.
 
@@ -104,7 +108,7 @@ swift build
 Audio conversion, word stability, punctuation rollover, pasteboard fidelity, physical paste events, insertion evidence, window behavior, and preferences have automated coverage. The full production path is opt-in because it downloads the ASR and VAD models:
 
 ```sh
-CADENCE_RUN_STREAMING_MODEL_TEST=1 swift test --filter streamingModelCommitsSentenceTailDuringPauseAndContinues
+CADENCE_RUN_STREAMING_MODEL_TEST=1 swift test --filter StreamingModelIntegrationTests
 ```
 
 Microphone permissions and cross-application insertion still require testing with the signed app because macOS privacy grants cannot be automated safely.

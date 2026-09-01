@@ -2,6 +2,27 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
+enum RecognitionProfile: String, CaseIterable, Codable, Identifiable, Sendable {
+    case fast
+    case accurate
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fast: "Fast"
+        case .accurate: "Accurate"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .fast: "~320 ms · best for immediate typing"
+        case .accurate: "~1.1 s · more context for difficult speech"
+        }
+    }
+}
+
 enum BarPlacement: String, CaseIterable, Codable, Identifiable {
     case bottom
     case top

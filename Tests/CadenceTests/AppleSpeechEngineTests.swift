@@ -61,6 +61,8 @@ import Testing
 /// This drives the real Cadence pipeline in microphone-sized chunks. Sentence
 /// one must be emitted word by word, including its tail and period, before any
 /// audio from sentence two is supplied; the held session must then continue.
+@Suite(.serialized)
+struct StreamingModelIntegrationTests {
 @Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_STREAMING_MODEL_TEST"] == "1"))
 func streamingModelCommitsSentenceTailDuringPauseAndContinues() async throws {
     let directory = FileManager.default.temporaryDirectory
@@ -99,7 +101,10 @@ func streamingModelCommitsSentenceTailDuringPauseAndContinues() async throws {
     let laterSentenceCount = 5
     for sentence in 1...laterSentenceCount {
         yieldSamples(finalSamples + silence, to: continuation)
-        _ = try #require(await recorder.waitForSentenceFinal(count: sentence + 1))
+        _ = try #require(
+            await recorder.waitForSentenceFinal(count: sentence + 1),
+            "Sentence \(sentence) did not close. Inserted: \(recorder.insertedText); updates: \(recorder.snapshot().map { $0.transcript })"
+        )
     }
     continuation.finish()
     let finalTranscript = try await transcription.value.lowercased()
@@ -118,6 +123,83 @@ func streamingModelCommitsSentenceTailDuringPauseAndContinues() async throws {
             "Streaming output revised already-visible text: \(previous.transcript) -> \(next.transcript)"
         )
     }
+}
+
+/// Exact regression for a dependent clause that used to become two sentences
+/// solely because Silero observed silence between the phrases.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_STREAMING_MODEL_TEST"] == "1"))
+func streamingModelKeepsContextAcrossAMidSentencePause() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cadence-context-test-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let speechURL = directory.appendingPathComponent("speech.aiff")
+    let continuationURL = directory.appendingPathComponent("continuation.aiff")
+    try synthesize("Because my Apple dictation", to: speechURL)
+    try synthesize("was messing that up for my summer reading", to: continuationURL)
+    let firstSamples = try AudioConverter().resampleAudioFile(speechURL)
+        + Array(repeating: Float.zero, count: 24_000)
+    let secondSamples = try AudioConverter().resampleAudioFile(continuationURL)
+        + Array(repeating: Float.zero, count: 16_000)
+
+    let transcriber = LiveSpeechTranscriber()
+    try await transcriber.prepare { _ in }
+    let (audio, continuation) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
+    let recorder = LiveUpdateRecorder()
+    let transcription = Task {
+        try await transcriber.transcribe(audio) { update in recorder.record(update) }
+    }
+
+    yieldSamples(firstSamples, to: continuation)
+    let pauseTail = try #require(await recorder.waitForInsertedSuffix("apple dictation"))
+    #expect(pauseTail.lowercased() == "because my apple dictation")
+    #expect(
+        !Set<Character>([".", "!", "?"]).contains(pauseTail.last ?? " "),
+        "A mid-sentence pause inserted sentence punctuation: \(pauseTail)"
+    )
+
+    yieldSamples(secondSamples, to: continuation)
+    continuation.finish()
+    let final = try await transcription.value.lowercased()
+    #expect(Set<Character>([".", "!", "?"]).contains(final.last ?? " "))
+    #expect(final.dropLast() == "because my apple dictation was messing that up for my summer reading")
+    #expect(!final.contains("dictation. was"))
+    #expect(recorder.insertedText.lowercased() == final)
+}
+
+/// The Accurate selector uses a different streaming context encoder. Exercise
+/// the real download/load path so the Settings choice cannot appear to work
+/// while silently leaving the Fast profile active.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_STREAMING_MODEL_TEST"] == "1"))
+func accurateProfileLoadsAndStreamsText() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cadence-accurate-test-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let speechURL = directory.appendingPathComponent("speech.aiff")
+    try synthesize("Jose Arcadio Buendia founded the town of Macondo", to: speechURL)
+    let samples = try AudioConverter().resampleAudioFile(speechURL)
+        + Array(repeating: Float.zero, count: 32_000)
+
+    let transcriber = LiveSpeechTranscriber()
+    try await transcriber.prepare(profile: .accurate) { _ in }
+    let (audio, continuation) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
+    let recorder = LiveUpdateRecorder()
+    let transcription = Task {
+        try await transcriber.transcribe(
+            audio,
+            dictionaryTerms: ["José Arcadio Buendía"]
+        ) { update in recorder.record(update) }
+    }
+
+    yieldSamples(samples, to: continuation)
+    continuation.finish()
+    let final = try await transcription.value
+    #expect(!final.isEmpty)
+    #expect(recorder.insertedText == final)
+}
 }
 
 private final class LiveUpdateRecorder: @unchecked Sendable {
@@ -147,6 +229,20 @@ private final class LiveUpdateRecorder: @unchecked Sendable {
                 return finals.count >= count ? finals[count - 1] : nil
             }
             if let match { return match }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return nil
+    }
+
+    func waitForInsertedSuffix(
+        _ suffix: String,
+        timeout: Duration = .seconds(15)
+    ) async -> String? {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            let value = lock.withLock { inserted }
+            if value.lowercased().hasSuffix(suffix.lowercased()) { return value }
             try? await Task.sleep(for: .milliseconds(20))
         }
         return nil

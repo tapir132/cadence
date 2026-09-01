@@ -32,14 +32,22 @@ struct LiveTranscriptEmitter {
     private(set) var completedText = ""
     private(set) var currentPartial = ""
     private(set) var insertedCurrentPrefix = ""
+    let cleanupEnabled: Bool
+    let dictionaryTerms: [String]
+
+    init(cleanupEnabled: Bool = false, dictionaryTerms: [String] = []) {
+        self.cleanupEnabled = cleanupEnabled
+        self.dictionaryTerms = dictionaryTerms
+    }
 
     var transcript: String {
         Self.join(completedText, currentPartial)
     }
 
+    var hasOpenSegment: Bool { !currentPartial.isEmpty || !insertedCurrentPrefix.isEmpty }
+
     mutating func consume(_ rawPartial: String) throws -> LiveTranscriptUpdate? {
-        let partial = SpokenPunctuationFormatter.format(rawPartial)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let partial = format(rawPartial)
         guard partial != currentPartial else { return nil }
         guard partial.hasPrefix(insertedCurrentPrefix) else {
             throw LiveTranscriptError.revisedVisibleText(
@@ -49,7 +57,7 @@ struct LiveTranscriptEmitter {
         }
 
         currentPartial = partial
-        let safePrefix = Self.safePrefix(in: partial)
+        let safePrefix = safePrefix(in: partial)
         // The model may temporarily withdraw the uncommitted frontier. In that
         // case `safePrefix` can be shorter than the text already inserted even
         // though `partial` still preserves every visible character. Update the
@@ -72,6 +80,38 @@ struct LiveTranscriptEmitter {
         )
     }
 
+    /// Commits the held frontier at a detected pause without closing the ASR
+    /// stream. If speech resumes, the recognizer retains the words before the
+    /// pause as language context and can decide whether punctuation belongs
+    /// there. No visible text is revised.
+    mutating func flushPauseTail(_ rawPartial: String) throws -> LiveTranscriptUpdate? {
+        let partial = format(rawPartial)
+        guard !partial.isEmpty else { return nil }
+        guard partial.hasPrefix(insertedCurrentPrefix) else {
+            throw LiveTranscriptError.revisedVisibleText(
+                previous: insertedCurrentPrefix,
+                replacement: partial
+            )
+        }
+
+        let rawDelta = String(partial.dropFirst(insertedCurrentPrefix.count))
+        let insertion = insertionDelta(rawDelta)
+        let changed = partial != currentPartial || !insertion.isEmpty
+        currentPartial = partial
+        insertedCurrentPrefix = partial
+        guard changed else { return nil }
+
+        return LiveTranscriptUpdate(
+            transcript: transcript,
+            insertion: insertion,
+            sentenceFinal: false
+        )
+    }
+
+    func pauseBoundaryDecision(for rawPartial: String) -> PauseBoundaryDecision {
+        PauseBoundaryClassifier.classify(format(rawPartial))
+    }
+
     /// Flushes the frontier word at a real sentence boundary. Parakeet normally
     /// supplies punctuation in its final right-context window; the fallback
     /// guarantees normal dictation punctuation when the shortcut is released
@@ -80,8 +120,7 @@ struct LiveTranscriptEmitter {
         _ rawFinal: String,
         continuesAfterPause: Bool
     ) throws -> LiveTranscriptUpdate? {
-        let unpunctuated = SpokenPunctuationFormatter.format(rawFinal)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let unpunctuated = format(rawFinal)
         guard !unpunctuated.isEmpty else {
             currentPartial = ""
             insertedCurrentPrefix = ""
@@ -121,6 +160,13 @@ struct LiveTranscriptEmitter {
         insertedCurrentPrefix = ""
     }
 
+    private func format(_ transcript: String) -> String {
+        let cleaned = SpeechCleanupFormatter.format(transcript, enabled: cleanupEnabled)
+        let punctuated = SpokenPunctuationFormatter.format(cleaned)
+        return DictionaryTermFormatter.apply(to: punctuated, terms: dictionaryTerms)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func insertionDelta(_ rawDelta: String) -> String {
         guard !rawDelta.isEmpty else { return "" }
         let startsNewSegment = insertedCurrentPrefix.isEmpty && !completedText.isEmpty
@@ -131,11 +177,14 @@ struct LiveTranscriptEmitter {
     /// boundary whitespace as well: the next committed word supplies its own
     /// leading separator, so a withdrawn frontier can still be replaced with
     /// sentence punctuation without leaving `word .` in the editor.
-    static func safePrefix(in transcript: String) -> String {
-        if let commandBoundary = SpokenPunctuationFormatter.safePrefixEndBeforeTrailingCommand(
-            in: transcript
-        ) {
-            return String(transcript[..<commandBoundary])
+    private func safePrefix(in transcript: String) -> String {
+        let commandBoundary = SpokenPunctuationFormatter.safePrefixEndBeforeTrailingCommand(in: transcript)
+        let dictionaryBoundary = DictionaryTermFormatter.safePrefixEndBeforeTrailingCandidate(
+            in: transcript,
+            terms: dictionaryTerms
+        )
+        if let boundary = [commandBoundary, dictionaryBoundary].compactMap({ $0 }).min() {
+            return String(transcript[..<boundary])
         }
         guard let boundary = transcript.lastIndex(where: { $0.isWhitespace }) else { return "" }
         return String(transcript[..<boundary])

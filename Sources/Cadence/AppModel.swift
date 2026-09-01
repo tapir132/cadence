@@ -49,6 +49,15 @@ final class AppModel: ObservableObject {
     }
     @Published var barPlacement: BarPlacement = .bottom { didSet { saveSettings() } }
     @Published var barScale = 0.85 { didSet { saveSettings() } }
+    @Published var recognitionProfile: RecognitionProfile = .fast {
+        didSet {
+            saveSettings()
+            guard recognitionProfile != oldValue else { return }
+            speechModelStatus = .preparing(progress: nil)
+            Task { [weak self] in await self?.prepareSpeechModel() }
+        }
+    }
+    @Published var speechCleanupEnabled = false { didSet { saveSettings() } }
     @Published private(set) var freeBarX = 0.5
     @Published private(set) var freeBarY = 0.0
 
@@ -82,6 +91,11 @@ final class AppModel: ObservableObject {
             barPlacement = saved
         }
         barScale = UserDefaults.standard.object(forKey: "barScale") as? Double ?? 0.85
+        if let raw = UserDefaults.standard.string(forKey: "recognitionProfile"),
+           let saved = RecognitionProfile(rawValue: raw) {
+            recognitionProfile = saved
+        }
+        speechCleanupEnabled = UserDefaults.standard.bool(forKey: "speechCleanupEnabled")
         freeBarX = UserDefaults.standard.object(forKey: "freeBarX") as? Double ?? 0.5
         freeBarY = UserDefaults.standard.object(forKey: "freeBarY") as? Double ?? 0
         if UserDefaults.standard.integer(forKey: "floatingBarDesignVersion") < 2 {
@@ -178,10 +192,16 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in self?.audioLevel = level }
             }
             transcriptionTask?.cancel()
+            let cleanupEnabled = speechCleanupEnabled
+            let dictionaryTerms = dictionary
             transcriptionTask = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    let text = try await transcriber.transcribe(audio) { [weak self] update in
+                    let text = try await transcriber.transcribe(
+                        audio,
+                        cleanupEnabled: cleanupEnabled,
+                        dictionaryTerms: dictionaryTerms
+                    ) { [weak self] update in
                         await self?.consume(update)
                     }
                     guard !Task.isCancelled else { return }
@@ -306,6 +326,8 @@ final class AppModel: ObservableObject {
         if let data = try? JSONEncoder().encode(shortcut) { UserDefaults.standard.set(data, forKey: "shortcut") }
         UserDefaults.standard.set(barPlacement.rawValue, forKey: "barPlacement")
         UserDefaults.standard.set(barScale, forKey: "barScale")
+        UserDefaults.standard.set(recognitionProfile.rawValue, forKey: "recognitionProfile")
+        UserDefaults.standard.set(speechCleanupEnabled, forKey: "speechCleanupEnabled")
     }
 
     func saveFreeBarPosition(x: Double, y: Double) {
@@ -324,24 +346,31 @@ final class AppModel: ObservableObject {
     private var isError: Bool { hasError }
 
     private func prepareSpeechModel() async {
+        let profile = recognitionProfile
         speechModelStatus = .preparing(progress: nil)
         do {
-            try await transcriber.prepare { [weak self] progress in
+            try await transcriber.prepare(profile: profile) { [weak self] progress in
                 Task { @MainActor [weak self] in
-                    guard self?.speechModelStatus != .ready else { return }
+                    guard self?.recognitionProfile == profile,
+                          self?.speechModelStatus != .ready else { return }
                     self?.speechModelStatus = .preparing(progress: progress)
                 }
             }
+            guard recognitionProfile == profile else { return }
             speechModelStatus = .ready
         } catch {
+            guard recognitionProfile == profile else { return }
             speechModelStatus = .failed(error.localizedDescription)
         }
     }
 
     private func consume(_ update: LiveTranscriptUpdate) {
         guard isListening else { return }
-        liveText = applyDictionaryCasing(to: update.transcript)
-        let insertion = applyDictionaryCasing(to: update.insertion)
+        // The emitter formats against the dictionary snapshot captured when
+        // dictation starts. Reformatting here could change text after the
+        // emitter has already decided that it is safe to insert.
+        liveText = update.transcript
+        let insertion = update.insertion
         guard !insertion.isEmpty else { return }
         committedText += insertion
         injector.enqueue(insertion)
@@ -350,9 +379,7 @@ final class AppModel: ObservableObject {
     private func completeTranscription(_ rawText: String) {
         guard state == .finishing else { return }
         transcriptionTask = nil
-        let finalText = applyDictionaryCasing(
-            to: rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        let finalText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = insertionSnapshot
         let completedTargetAppName = targetAppName
         insertionSnapshot = nil
@@ -400,27 +427,6 @@ final class AppModel: ObservableObject {
         startedAt = nil
         audioLevel = 0
         insertionSnapshot = nil
-    }
-
-    /// Streaming Parakeet does not safely revise already-inserted words for
-    /// arbitrary vocabulary boosting. Preserve the
-    /// user's exact capitalization only when those words were already decoded;
-    /// fuzzy replacement would risk inventing the very words this path avoids.
-    private func applyDictionaryCasing(to text: String) -> String {
-        var result = text
-        for term in dictionary.sorted(by: { $0.count > $1.count }) {
-            let escaped = NSRegularExpression.escapedPattern(for: term)
-            guard let expression = try? NSRegularExpression(
-                pattern: "(?i)(?<![\\p{L}\\p{N}_])\(escaped)(?![\\p{L}\\p{N}_])"
-            ) else { continue }
-            let range = NSRange(result.startIndex..<result.endIndex, in: result)
-            result = expression.stringByReplacingMatches(
-                in: result,
-                range: range,
-                withTemplate: NSRegularExpression.escapedTemplate(for: term)
-            )
-        }
-        return result
     }
 
     private func persistDictionary() {

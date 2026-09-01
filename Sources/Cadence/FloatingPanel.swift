@@ -24,7 +24,7 @@ enum FloatingBarMode: Equatable {
         case .idle:
             NSSize(width: 56, height: 56)
         case .listening, .error:
-            NSSize(width: 430, height: 72)
+            NSSize(width: 390, height: 64)
         }
     }
 }
@@ -32,6 +32,28 @@ enum FloatingBarMode: Equatable {
 @MainActor
 final class FloatingBarPresentation: ObservableObject {
     @Published var mode: FloatingBarMode = .idle
+
+    static func mode(
+        state: DictationState,
+        isHovered: Bool,
+        isDragging: Bool,
+        placement: BarPlacement,
+        freeX: Double,
+        freeY: Double
+    ) -> FloatingBarMode {
+        let isListening = state == .listening || state == .finishing
+        let hasError: Bool
+        if case .error = state { hasError = true } else { hasError = false }
+        return mode(
+            isListening: isListening,
+            hasError: hasError,
+            isHovered: isHovered,
+            isDragging: isDragging,
+            placement: placement,
+            freeX: freeX,
+            freeY: freeY
+        )
+    }
 
     static func mode(
         isListening: Bool,
@@ -86,8 +108,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         self.model = model
         recoveryOverlay = InsertionRecoveryOverlayController(model: model)
         presentation.mode = FloatingBarPresentation.mode(
-            isListening: model.isListening,
-            hasError: model.hasError,
+            state: model.state,
             isHovered: false,
             isDragging: false,
             placement: model.barPlacement,
@@ -146,8 +167,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         model.$state
             .removeDuplicates()
             .dropFirst()
-            .sink { [weak self] _ in
-                self?.refreshPresentation(animated: true)
+            .sink { [weak self] state in
+                // @Published emits from willSet. Use the delivered state instead
+                // of rereading `model.state`, which is still the previous value.
+                self?.refreshPresentation(animated: true, state: state)
             }
             .store(in: &cancellables)
 
@@ -211,12 +234,12 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private func refreshPresentation(
         animated: Bool,
         placement placementOverride: BarPlacement? = nil,
-        scale scaleOverride: Double? = nil
+        scale scaleOverride: Double? = nil,
+        state stateOverride: DictationState? = nil
     ) {
         let placement = placementOverride ?? model.barPlacement
         let mode = FloatingBarPresentation.mode(
-            isListening: model.isListening,
-            hasError: model.hasError,
+            state: stateOverride ?? model.state,
             isHovered: isPointerInside,
             isDragging: isTrackingDrag,
             placement: placement,
@@ -704,41 +727,41 @@ struct FloatingBar: View {
     }
 
     private var listeningBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 9) {
             Button { model.cancelDictation() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
                     .background(Circle().fill(Color.white.opacity(0.28)))
             }
             .buttonStyle(.plain)
 
-            WaveformMark(level: model.audioLevel, bars: 7)
+            WaveformMark(level: model.audioLevel, bars: 6)
 
             Text(previewText)
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.62))
                 .lineLimit(1)
-                .frame(maxWidth: 215, alignment: .leading)
+                .frame(maxWidth: 195, alignment: .leading)
 
             Button { model.stopDictation() } label: {
                 Image(systemName: model.state == .finishing ? "ellipsis" : "checkmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(CadenceTheme.ink)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
                     .background(Circle().fill(CadenceTheme.cream))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 9)
-        .frame(width: 408, height: 48)
+        .padding(.horizontal, 8)
+        .frame(width: 370, height: 44)
         .background(
             Capsule()
                 .fill(CadenceTheme.ink.opacity(0.97))
                 .overlay(Capsule().stroke(Color(red: 0.3, green: 0.29, blue: 0.26), lineWidth: 1))
-                .shadow(color: .black.opacity(0.24), radius: 16, y: 7)
+                .shadow(color: .black.opacity(0.22), radius: 8, y: 4)
         )
-        .frame(width: 430, height: 72)
+        .frame(width: 390, height: 64)
     }
 
     private var previewText: String {
@@ -751,7 +774,7 @@ struct FloatingBar: View {
             Image(systemName: "exclamationmark")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .background(Circle().fill(CadenceTheme.coral))
 
             VStack(alignment: .leading, spacing: 2) {
@@ -769,20 +792,20 @@ struct FloatingBar: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(CadenceTheme.ink)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
                     .background(Circle().fill(CadenceTheme.cream))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss dictation error")
         }
         .padding(.horizontal, 10)
-        .frame(width: 408, height: 56)
+        .frame(width: 370, height: 50)
         .background(
             Capsule()
                 .fill(CadenceTheme.ink.opacity(0.97))
                 .shadow(color: .black.opacity(0.24), radius: 8, y: 4)
         )
-        .frame(width: 430, height: 72)
+        .frame(width: 390, height: 64)
     }
 
     private var idleLogo: some View {

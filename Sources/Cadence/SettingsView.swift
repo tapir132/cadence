@@ -47,6 +47,10 @@ struct SettingsView: View {
                 sectionTitle("Recognition").padding(.top, 34)
                 VStack(spacing: 0) {
                     speechModelRow
+                    line
+                    recognitionProfileRow
+                    line
+                    speechCleanupRow
                 }
                 .settingsSurface()
 
@@ -132,26 +136,34 @@ struct SettingsView: View {
 
                 sectionTitle("Updates").padding(.top, 34)
                 VStack(spacing: 0) {
-                    Toggle(isOn: $updates.automaticallyChecks) {
+                    HStack(spacing: 18) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Check automatically").font(.system(size: 13, weight: .semibold))
                             Text("Looks for signed GitHub releases every six hours.")
                                 .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                         }
+                        Spacer(minLength: 18)
+                        Toggle("Check automatically", isOn: $updates.automaticallyChecks)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("Check automatically")
                     }
-                    .toggleStyle(.switch)
                     .padding(16)
 
                     line
 
-                    Toggle(isOn: $updates.automaticallyDownloads) {
+                    HStack(spacing: 18) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Download and install automatically").font(.system(size: 13, weight: .semibold))
                             Text("Sparkle verifies the EdDSA signature before replacing Cadence.")
                                 .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                         }
+                        Spacer(minLength: 18)
+                        Toggle("Download and install automatically", isOn: $updates.automaticallyDownloads)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("Download and install automatically")
                     }
-                    .toggleStyle(.switch)
                     .disabled(!updates.automaticallyChecks)
                     .padding(16)
 
@@ -233,7 +245,8 @@ struct SettingsView: View {
                 switch model.speechModelStatus {
                 case .ready:
                     Group {
-                        Text("Ready · live transcription runs entirely on this Mac")
+                        Text("Ready · \(model.recognitionProfile.detail)")
+                        Text("Live transcription runs entirely on this Mac.")
                         Text("Say “period,” “full stop,” or “question mark” to insert punctuation.")
                     }
                     .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
@@ -253,6 +266,59 @@ struct SettingsView: View {
             }
         }
         .padding(16)
+    }
+
+    private var recognitionProfileRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Recognition profile").font(.system(size: 13, weight: .semibold))
+                Text("Both profiles use Parakeet Unified 0.6B. Accurate listens with more context and may download one additional local encoder.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Picker("Recognition profile", selection: $model.recognitionProfile) {
+                ForEach(RecognitionProfile.allCases) { profile in
+                    Text(profile.title).tag(profile)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 176)
+            .disabled(model.isListening || speechModelIsPreparing)
+        }
+        .padding(16)
+    }
+
+    private var speechCleanupRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text("Filler-word cleanup").font(.system(size: 13, weight: .semibold))
+                    Text("BETA")
+                        .font(.system(size: 8, weight: .bold))
+                        .tracking(0.8)
+                        .foregroundStyle(CadenceTheme.muted)
+                }
+                Text("Removes hesitation sounds such as “um” and “uh” before they are typed. It does not rewrite text already inserted in another app.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Toggle("Filler-word cleanup", isOn: $model.speechCleanupEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel("Filler-word cleanup")
+        }
+        .disabled(model.isListening)
+        .padding(16)
+    }
+
+    private var speechModelIsPreparing: Bool {
+        if case .preparing = model.speechModelStatus { return true }
+        return false
     }
 
     private func permissionRow(_ title: String, detail: String, granted: Bool) -> some View {

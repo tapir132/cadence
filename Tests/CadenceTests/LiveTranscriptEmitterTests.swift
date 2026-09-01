@@ -37,6 +37,47 @@ import Testing
     #expect(secondFinal.transcript == inserted)
 }
 
+@Test func grammaticalPauseFlushesTailWithoutInventingASentenceBoundary() throws {
+    var emitter = LiveTranscriptEmitter()
+    var inserted = ""
+
+    inserted += try emitter.consume("Because my Apple")?.insertion ?? ""
+    let pause = try emitter.flushPauseTail("Because my Apple dictation")
+    inserted += pause?.insertion ?? ""
+    #expect(inserted == "Because my Apple dictation")
+    #expect(pause?.transcript == inserted)
+    #expect(pause?.sentenceFinal == false)
+
+    inserted += try emitter.consume(
+        "Because my Apple dictation was messing"
+    )?.insertion ?? ""
+    let final = try emitter.finalize(
+        "Because my Apple dictation was messing that up",
+        continuesAfterPause: false
+    )
+    inserted += final?.insertion ?? ""
+
+    #expect(inserted == "Because my Apple dictation was messing that up.")
+    #expect(final?.transcript == inserted)
+}
+
+@Test func multiwordDictionaryPhraseStaysProvisionalUntilExactSpellingIsSafe() throws {
+    var emitter = LiveTranscriptEmitter(dictionaryTerms: ["José Arcadio Buendía"])
+    var inserted = ""
+
+    inserted += try emitter.consume("I met Jose")?.insertion ?? ""
+    inserted += try emitter.consume("I met Jose Arcadio")?.insertion ?? ""
+    #expect(inserted == "I met")
+
+    inserted += try emitter.consume("I met Jose Arcadio Buendia yesterday")?.insertion ?? ""
+    #expect(inserted == "I met José Arcadio Buendía")
+    inserted += try emitter.finalize(
+        "I met Jose Arcadio Buendia yesterday",
+        continuesAfterPause: false
+    )?.insertion ?? ""
+    #expect(inserted == "I met José Arcadio Buendía yesterday.")
+}
+
 @Test func terminalPunctuationRemainsProvisionalUntilFinalization() throws {
     var emitter = LiveTranscriptEmitter()
     #expect(try emitter.consume("Really")?.insertion == "")

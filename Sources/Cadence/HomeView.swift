@@ -187,12 +187,25 @@ private struct RecordRow: View {
                 .foregroundStyle(CadenceTheme.muted)
             }
             Spacer()
-            if hovering {
-                Button { model.copy(record.text) } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).help("Copy")
-                Button { model.deleteRecord(record) } label: { Image(systemName: "trash") }
-                    .buttonStyle(.plain).help("Delete")
+            HStack(spacing: 4) {
+                Button { model.copy(record.text) } label: {
+                    Image(systemName: "doc.on.doc").frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help("Copy")
+                Button { model.deleteRecord(record) } label: {
+                    Image(systemName: "trash").frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help("Delete")
             }
+            // Keep this gutter in the row at all times. Hovering should reveal
+            // actions, never steal width from the transcript and reflow it.
+            .frame(width: 52, alignment: .trailing)
+            .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering)
+            .accessibilityHidden(!hovering)
+            .animation(.easeOut(duration: 0.12), value: hovering)
         }
         .padding(.vertical, 16)
         .contentShape(Rectangle())

@@ -160,3 +160,12 @@ import Testing
         #expect(try JSONDecoder().decode(BarPlacement.self, from: data) == placement)
     }
 }
+
+@Test func recognitionProfilesRoundTripAndDescribeTheirTradeoff() throws {
+    for profile in RecognitionProfile.allCases {
+        let data = try JSONEncoder().encode(profile)
+        #expect(try JSONDecoder().decode(RecognitionProfile.self, from: data) == profile)
+    }
+    #expect(RecognitionProfile.fast.unifiedConfig.latencyMs == 320)
+    #expect(RecognitionProfile.accurate.unifiedConfig.latencyMs == 1_120)
+}
