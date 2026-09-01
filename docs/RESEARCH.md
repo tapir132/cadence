@@ -33,15 +33,31 @@ The new pipeline uses [FluidAudio's pinned Parakeet Unified streaming manager](h
 
 The pinned [Unified benchmark](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/ASR/Parakeet/Unified/benchmark.md) reports 2.37% aggregate WER for Fast and 2.25% for Accurate on the same 150-file LibriSpeech comparison. The difference is modest; Accurate is a larger-context profile, not a different or magically stronger language model. These corpus figures guide a latency tradeoff and are not a promise for microphones, accents, names, or essay prose.
 
+NVIDIA's broader [model-card benchmark](https://huggingface.co/nvidia/parakeet-unified-en-0.6b#asr-performance-wo-pnc) reports an average leaderboard WER of 6.92 at 0.32 seconds, 6.29 at 1.12 seconds, and 6.14 at 2.08 seconds. The extra context after 1.12 seconds buys only a small aggregate improvement while doubling latency, so Cadence exposes Fast and Accurate rather than presenting an even slower tier as a stronger model. A model picker is an accuracy/latency control, not a guarantee for rare names.
+
+The pinned FluidAudio manager can load an additional CTC model for vocabulary boosting, but its own streaming implementation [rescans word-aligned segments of roughly 15 seconds and surfaces corrections retroactively](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/ASR/Parakeet/Unified/StreamingUnifiedAsrManager.swift#L67-L88). FluidAudio also documents reduced streaming accuracy, limited multiword support, and no cross-chunk detection in its [custom-vocabulary guide](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Documentation/ASR/CustomVocabulary.md#streaming-mode-limitations). Enabling that path would violate Cadence's append-only contract after words were already pasted. Cadence therefore keeps exact dictionary correction before insertion and does not claim acoustic vocabulary boosting yet.
+
 ### Stable word emission
 
-Streaming hypotheses can expose or revise an unfinished subword—for example, `dict` before `dictation`. `LiveTranscriptEmitter` therefore holds the final whitespace-delimited word and any attached punctuation. When the next word boundary appears, the completed word becomes an insertion delta. A sentence pause finalizes the held tail. The floating bar remains free to show the provisional text, so the preview can be slightly ahead of the editor without risking a broken fragment in the document.
+[Google's primary study of streaming ASR stability](https://research.google/pubs/analyzing-the-quality-and-stability-of-a-streaming-end-to-end-on-device-speech-recognizer/) confirms that partial results can be revised before finalization. A streaming hypothesis can also expose an unfinished subword—for example, `dict` before `dictation`. `LiveTranscriptEmitter` therefore holds the final whitespace-delimited word and any attached punctuation. When the next word boundary appears, the completed word becomes an insertion delta. A sentence pause finalizes the held tail. The floating bar remains free to show the provisional text, so the preview can be slightly ahead of the editor without risking a broken fragment in the document.
+
+The optional one-second typing buffer is implemented at this stability boundary, not as a timer in front of Command-V. Each safe prefix records when it first appeared. It becomes immutable only after the exact prefix has survived for one additional second; a contradicted, still-unpasted checkpoint is discarded. Each word keeps its own first-seen time, so the stream continues moving instead of batching an entire sentence. A VAD pause or shortcut release still flushes the current tail immediately, preventing the old missing-final-words failure from returning.
 
 Committed words are inserted without trailing whitespace; the next committed word supplies its own leading separator. This makes it possible to append a period correctly even if a later hypothesis withdraws the provisional word that had followed the visible text. A revision is an error only when the new hypothesis no longer preserves the exact character prefix already inserted into the document.
 
 Apple's [macOS dictation command reference](https://support.apple.com/guide/mac-help/mh40695/mac) treats spoken punctuation names as commands. Cadence applies `period`, `full stop`, and `question mark` to each streaming hypothesis before stabilization. Therefore the command can change while it is still preview-only, and only the resulting symbol is ever committed to the editor.
 
 The personal dictionary runs at the same pre-insertion stage. Case- and diacritic-insensitive exact matches restore the saved spelling. A possible multiword dictionary prefix remains provisional until it completes or stops matching, so `Jose Arcadio Buendia` can safely become `José Arcadio Buendía` without revising visible text. The optional cleanup toggle removes only standalone hesitation sounds such as `um`, `uh`, `erm`, and `er`; arbitrary prose rewriting is deliberately excluded from this append-only path.
+
+### Snippet triggers without editor rewrites
+
+Wispr describes snippets as voice shortcuts where speaking a cue pastes the [full saved text](https://wisprflow.ai/post/snippets), and its feature page promises that the cue produces the [full formatted text at the cursor](https://try.wisprflow.ai/). Cadence implements the safe part of that contract locally: exact, case- and diacritic-insensitive whole-phrase matching, with no fuzzy trigger guessing and no recursive expansion of replacement text.
+
+An incomplete trigger and a complete trigger at the live frontier both remain provisional. A following word confirms the phrase during continuous speech; a real pause confirms a standalone trigger. Only the expansion crosses the insertion boundary, so the editor never receives ordinary trigger words that would later need deletion. The optional stability buffer adds another second in which a falsely recognized trigger can disappear before its expansion is committed.
+
+Cadence rejects duplicate triggers, triggers where one complete phrase is the prefix of another, and triggers containing reserved spoken-punctuation commands. Those ambiguous configurations cannot be resolved safely without revising visible text. A bare standalone snippet remains byte-for-byte equivalent to its saved plain text; automatic sentence finalization does not invent a period, while explicitly saying `period` or `question mark` still appends that symbol.
+
+Version one intentionally stores and inserts plain text. AppKit supports RTF and plain representations on one pasteboard item, but preserving rich runs through mixed streaming deltas requires provenance that the current string-only emitter does not have. Pretending otherwise would create target-dependent formatting. Snippets are stored atomically under `~/Library/Application Support/Cadence` with owner-only file permissions and are snapshotted when dictation starts. They are local but not an encrypted secrets vault.
 
 ### Pause finalization and continuous rollover
 
@@ -88,6 +104,14 @@ Every event in that Command-V sequence is source-tagged. This prevents the short
 
 After the queue drains, Cadence checks accessible text or cursor movement when the editor exposes it. Quartz has no delivery receipt, so opaque editors remain “unverifiable” rather than being reported as successful. A definite unchanged editor or posting failure produces the recovery card.
 
+## Download and installation packaging
+
+Apple recommends a disk image for directly distributing a single app bundle and says to sign the app before creating and, when possible, signing the outer container in its [macOS packaging guidance](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution). Sparkle specifically recommends an [`/Applications` symlink inside the website DMG](https://sparkle-project.org/documentation/#distributing-your-app) so people copy the app out of the read-only image.
+
+Cadence's installer script copies the already-signed app into an isolated staging directory, adds that exact symlink, creates a compressed read-only UDZO image, then mount-tests the app signature, bundle property list, and symlink target. It signs the DMG only when a Developer ID Application identity is available: Apple's code-signing guidance says that is the supported identity for disk images. The current self-signed `Cadence Signing` identity preserves local privacy grants but does not satisfy Gatekeeper or replace notarization, so it is not misrepresented as a distribution signature.
+
+The human download is the DMG. Sparkle remains ZIP-backed because its appcast already authenticates that symlink-preserving update archive with Ed25519, and building the DMG only after appcast generation prevents two same-version containers from being selected accidentally.
+
 ## Product comparison with Wispr Flow
 
 Wispr Flow's advantage is not only raw ASR. Its [context-awareness documentation](https://docs.wisprflow.ai/articles/4678293671-Context-Awareness) says it uses the active application and limited text near the cursor to adapt vocabulary, style, and formatting. Its [privacy/cloud documentation](https://docs.wisprflow.ai/articles/4709791908-understanding-privacy-mode-and-cloud-sync) describes cloud processing and personalized models.
@@ -110,9 +134,11 @@ Parakeet Unified streaming decoder
       │ streaming partial hypothesis
       ▼
 LiveTranscriptEmitter
-      ├── preview: complete partial, including frontier word
+      ├── format: cleanup → spoken punctuation → dictionary → snippets
+      ├── preview: complete formatted partial, including frontier word
       ├── pause classifier: complete / continuation / uncertain
-      └── insertion: completed-word deltas and pause tail only
+      └── insertion: stable completed-word deltas and pause tail only
+               └── optional one-second prefix checkpoint
                │
                ▼
 KeystrokeInjector (one serialized paste queue)
@@ -140,6 +166,8 @@ The modifier-only regression recreates an Option-held session, passes the comple
 
 The provisional-tail regression reproduces the observed `…like 0.` → `…like` hypothesis change. It requires the preview to revise without an exception, requires already-inserted text to remain untouched, and verifies that a later `0.2` finalization reconstructs the intended sentence exactly.
 
+Snippet regressions cover exact whole-phrase matching, case and diacritics, incomplete and trailing triggers, punctuation, multi-line replacements, nonrecursive expansion, invalid trigger overlap, private-file permissions, and a false trigger revised during the optional stability second. The DMG verifier mounts the actual compressed image read-only and inspects what Finder exposes rather than assuming the staging directory survived image creation.
+
 ## Deliberate boundaries
 
 - English first; the Unified checkpoint is English-only.
@@ -147,6 +175,8 @@ The provisional-tail regression reproduces the observed `…like 0.` → `…lik
 - Words appear after a following boundary confirms they are complete, so preview text can lead editor text by roughly one word.
 - Tail words flush after approximately 750 ms of silence. Terminal punctuation can take up to roughly another 512 ms for an uncertain boundary; a clear dependent clause remains open for the next phrase or shortcut release.
 - Filler cleanup is conservative. Cadence cannot safely interpret free-form corrections such as “forget that” after the referenced words have already been inserted without introducing an editor-revision path.
+- Snippets are exact plain-text macros. Rich formatting needs attributed-run provenance and multiple pasteboard representations before it can be promised consistently across editors.
+- Personalized character-by-character playback remains research. Apple's Unicode-event documentation says application frameworks may ignore synthetic Unicode payloads, while typing timing, dwell, flight, and digraph features are studied as a behavioral biometric. Any future calibration must be explicit, local, resettable, timing-only by default, and use a delivery mechanism that survives real-editor tests.
 - No cloud LLM rewrite, accounts, sync, document-context reading, or audio retention.
 - The transcript remains on the clipboard after insertion, favoring recoverability over transparent clipboard restoration.
 - Secure fields and applications that reject synthetic shortcuts may still refuse insertion; Cadence preserves the transcript and reports definite failures.

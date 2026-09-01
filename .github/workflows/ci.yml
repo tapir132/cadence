@@ -14,9 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test
-        run: swift test
+        run: swift test -Xswiftc -warnings-as-errors
       - name: Build and verify app bundle
         run: |
           ./scripts/build-app.sh
           plutil -lint dist/Cadence.app/Contents/Info.plist
           codesign --verify --deep --strict --verbose=2 dist/Cadence.app
+          ./scripts/build-dmg.sh dist/Cadence.app release/installers/Cadence.dmg
+          ./scripts/verify-dmg.sh release/installers/Cadence.dmg

@@ -57,6 +57,11 @@ jobs:
               -o release/appcast.xml \
               release
 
+      - name: Create drag-to-Applications disk image
+        run: |
+          ./scripts/build-dmg.sh dist/Cadence.app release/installers/Cadence-edge.dmg
+          ./scripts/verify-dmg.sh release/installers/Cadence-edge.dmg
+
       - name: Publish rolling Edge prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,6 +75,7 @@ jobs:
           fi
           gh release upload edge \
             release/Cadence-edge.zip \
+            release/installers/Cadence-edge.dmg \
             release/appcast.xml \
             --repo "$GITHUB_REPOSITORY" \
             --clobber

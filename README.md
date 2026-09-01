@@ -12,6 +12,8 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Serialized standard clipboard pastes instead of lossy per-character Unicode events
 - Focus-bound delivery that refuses to paste after the user changes windows
 - Personal dictionary spelling, capitalization, and diacritics for names and specialized vocabulary
+- Local snippets that expand a spoken trigger before any trigger words reach the editor
+- Optional one-second stability buffer with an immediate live preview
 - Configurable global keyboard shortcut
 - Edge-aware idle handle that expands on hover or while dictating
 - Eight edge snap points, Command-drag free positioning, and adjustable sizing
@@ -42,9 +44,18 @@ Local app bundles receive a timestamp build number and a `-local.<commit>` displ
 
 The build uses Swift Package Manager and produces an application bundle at `dist/Cadence.app`. A full Xcode installation is not required; current Command Line Tools are sufficient.
 
+To create and mount-test the same drag-to-Applications installer attached to downloads:
+
+```sh
+./scripts/build-dmg.sh
+./scripts/verify-dmg.sh release/installers/Cadence.dmg
+```
+
 Official builds are signed with the project's `Cadence Signing` certificate so macOS privacy grants survive updates. Without that identity the script falls back to an ad-hoc signature, which works but makes macOS treat every rebuild as a new app: re-grant Accessibility after rebuilding. See [Releasing](docs/RELEASING.md) for details.
 
 ## First launch
+
+Open the downloaded `Cadence.dmg`, then drag **Cadence** onto the **Applications** shortcut in its Finder window. Launch the installed copy from Applications. The ZIP attached to each release remains the signed Sparkle update archive; the DMG is the human-facing installer.
 
 Open **Settings** in Cadence and grant the two required permissions:
 
@@ -67,6 +78,8 @@ After about 750 ms of speech-ending silence, Cadence inserts the sentence tail a
 
 Personal-dictionary matching occurs before text becomes visible. Cadence can therefore hold a possible multiword name briefly and safely restore exact case and diacritics—for example, `Jose Arcadio Buendia` to `José Arcadio Buendía`—without editing text after it was pasted. Optional filler-word cleanup also runs at this pre-insertion stage. It is intentionally conservative and does not rewrite earlier prose or interpret “forget that” as a destructive edit.
 
+Snippets use that same append-only boundary. Cadence holds an incomplete or just-completed trigger in the preview, expands it locally, and inserts only the replacement after a following word or pause confirms the trigger. It never types the trigger and edits it afterward. The optional one-second stability buffer keeps the preview immediate while allowing an unpasted partial prefix to change; pauses and shortcut release still flush immediately.
+
 Each safe text delta is written to the pasteboard and delivered with a complete physical Command-down, V-down, V-up, Command-up sequence. Paste operations are serialized so a later word cannot replace the pasteboard before the focused editor consumes the previous one.
 
 The application and focused window captured at recording start are checked again immediately before the V key-down. If the target changed, Cadence leaves the transcript on the clipboard and shows a recovery card instead of risking a paste into the wrong window. See [Research and architecture](docs/RESEARCH.md) for the evidence and tradeoffs behind this design.
@@ -74,7 +87,8 @@ The application and focused window captured at recording start are checked again
 ## Privacy and security
 
 - Audio is processed locally by the downloaded Parakeet/Core ML model and is not saved by Cadence.
-- Transcript history and personal dictionary entries are stored locally in the app's user defaults.
+- Transcript history and personal dictionary entries are stored locally in the app's user defaults. Snippet bodies are stored as an atomic JSON file in Cadence's Application Support directory.
+- Snippets are plain text and are not an encrypted password vault; do not use them for passwords or other secrets.
 - Cadence does not include analytics, advertising, accounts, or cloud sync.
 - Update archives and the update feed are verified with Ed25519 signatures before installation.
 - The private update-signing key is not stored in this repository.
@@ -90,6 +104,7 @@ Please report security issues through the repository's private security advisory
 | `AudioCaptureEngine` | Captures and streams ordered 16 kHz mono microphone chunks |
 | `LiveSpeechTranscriber` | Runs Silero VAD and streaming Parakeet Unified decoding with pause rollover |
 | `LiveTranscriptEmitter` | Holds the unfinished word and emits only safe append-only text deltas |
+| `SnippetFormatter` | Replaces exact spoken triggers while keeping their live frontier provisional |
 | `KeystrokeInjector` | Serializes focus-bound clipboard pastes to the target app |
 | `FloatingPanelController` | Manages the cross-Space, dockable, draggable recording surface |
 | `AppModel` | Coordinates sessions, permissions, preferences, and local history |

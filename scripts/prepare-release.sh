@@ -33,5 +33,9 @@ ditto -c -k --sequesterRsrc --keepParent "$PROJECT_DIR/dist/Cadence.app" "$ARCHI
   -o "$RELEASE_DIR/appcast.xml" \
   "$RELEASE_DIR"
 
+DMG="$RELEASE_DIR/installers/Cadence-$VERSION.dmg"
+"$PROJECT_DIR/scripts/build-dmg.sh" "$PROJECT_DIR/dist/Cadence.app" "$DMG"
+"$PROJECT_DIR/scripts/verify-dmg.sh" "$DMG"
+
 echo "Prepared signed update artifacts in $RELEASE_DIR"
 echo "No files were uploaded. Review them before creating GitHub release v$VERSION."

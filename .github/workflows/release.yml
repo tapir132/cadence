@@ -90,6 +90,13 @@ jobs:
               -o release/appcast.xml \
               release
 
+      - name: Create drag-to-Applications disk image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          ./scripts/build-dmg.sh dist/Cadence.app "release/installers/Cadence-$VERSION.dmg"
+          ./scripts/verify-dmg.sh "release/installers/Cadence-$VERSION.dmg"
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,6 +108,7 @@ jobs:
           fi
           gh release create "v$VERSION" \
             "release/Cadence-$VERSION.zip" \
+            "release/installers/Cadence-$VERSION.dmg" \
             release/appcast.xml \
             --repo "$GITHUB_REPOSITORY" \
             --title "$title" \

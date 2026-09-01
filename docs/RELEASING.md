@@ -35,6 +35,9 @@ The script:
 3. Builds and signs `Cadence.app`.
 4. Creates a symlink-preserving ZIP archive.
 5. Generates a signed Sparkle appcast and fast LZFSE delta updates when older archives are available.
+6. Creates and mount-tests a DMG containing `Cadence.app` and an Applications shortcut.
+
+Apple supports distribution-signing a disk image only with a Developer ID Application identity. `scripts/build-dmg.sh` uses one automatically when available (or the identity named by `CADENCE_DMG_SIGNING_IDENTITY`); it intentionally leaves the DMG unsigned when the project has only its self-signed `Cadence Signing` app identity. That identity still seals the app and preserves privacy grants, but it does not replace Developer ID or notarization.
 
 Nothing is uploaded automatically. Inspect the ignored `release/` directory before publishing.
 
@@ -59,9 +62,10 @@ After the exact Edge build passes the manual smoke test, run the **Release Caden
 The workflow refuses to publish if the commit is not on `main`, is no longer the current Edge build, or lacks the explicit smoke-test confirmation. It creates a GitHub Release containing:
 
 - `Cadence-X.Y.Z.zip`
+- `Cadence-X.Y.Z.dmg`
 - `appcast.xml`
 
-Installed copies read the appcast from the latest GitHub Release. Sparkle verifies the signed feed and archive, downloads the update, swaps the application atomically, and relaunches it.
+People installing Cadence open the DMG and drag the app onto its Applications shortcut. Installed copies continue to read the appcast from the latest GitHub Release. Sparkle verifies the signed feed and ZIP archive, downloads the update, swaps the application atomically, and relaunches it.
 
 ## Release maturity and update channels
 
