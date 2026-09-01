@@ -50,6 +50,8 @@ Open **Settings** in Cadence and grant the three required permissions:
 2. Speech Recognition
 3. Accessibility
 
+Cadence re-checks these every few seconds while Settings is open, so changes made in System Settings show up without restarting the app. If macOS lists Cadence as enabled but Cadence still reports a permission as needed, remove Cadence from that list in System Settings and grant it again: the entry belongs to a different copy of the app.
+
 Place the cursor in an editor and press the configured shortcut. The default is **Control–Option–Space**. Press it again to finish.
 
 The floating bar can stop or cancel dictation without activating the main Cadence window. When idle, it collapses into a slim edge-aware handle and expands when hovered. Drag the expanded logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement. Double-click the logo to open Cadence; a single click never opens the app.

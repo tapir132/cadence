@@ -216,9 +216,13 @@ final class AppModel: ObservableObject {
     }
 
     func refreshPermissions() {
-        microphoneAuthorized = AppleSpeechEngine.microphoneAuthorized
-        speechAuthorized = AppleSpeechEngine.speechAuthorized
-        accessibilityAuthorized = AXIsProcessTrusted()
+        // Polled while Settings is visible; only publish real changes.
+        let microphone = AppleSpeechEngine.microphoneAuthorized
+        let speech = AppleSpeechEngine.speechAuthorized
+        let accessibility = AXIsProcessTrusted()
+        if microphone != microphoneAuthorized { microphoneAuthorized = microphone }
+        if speech != speechAuthorized { speechAuthorized = speech }
+        if accessibility != accessibilityAuthorized { accessibilityAuthorized = accessibility }
     }
 
     func addDictionaryTerm(_ term: String) {

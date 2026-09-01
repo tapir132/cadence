@@ -223,7 +223,14 @@ struct SettingsView: View {
             .padding(42)
             .frame(maxWidth: 860, alignment: .leading)
         }
-        .onAppear { model.refreshPermissions() }
+        // Grants change in System Settings while this page is visible, so poll
+        // instead of reading once on appear; the task ends when the page closes.
+        .task {
+            while !Task.isCancelled {
+                model.refreshPermissions()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
     }
 
     private func sectionTitle(_ text: String) -> some View {
