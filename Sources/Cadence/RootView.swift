@@ -45,7 +45,7 @@ struct RootView: View {
                                 .lineLimit(2)
                             Spacer()
                             Button { model.dismissError() } label: {
-                                Image(systemName: "xmark")
+                                Image(systemName: "xmark").frame(width: 24, height: 24).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -135,6 +135,7 @@ struct RootView: View {
                     .fill(model.selectedSection == section ? Color.white.opacity(0.095) : .clear)
             )
             .padding(.horizontal, 8)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

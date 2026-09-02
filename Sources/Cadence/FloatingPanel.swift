@@ -444,7 +444,7 @@ private struct InsertionRecoveryCard: View {
                     Button { model.dismissInsertionRecovery() } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 10, weight: .bold))
-                            .frame(width: 24, height: 24)
+                            .frame(width: 24, height: 24).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.white.opacity(0.58))

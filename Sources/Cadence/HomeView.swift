@@ -189,12 +189,12 @@ private struct RecordRow: View {
             Spacer()
             HStack(spacing: 4) {
                 Button { model.copy(record.text) } label: {
-                    Image(systemName: "doc.on.doc").frame(width: 24, height: 24)
+                    Image(systemName: "doc.on.doc").frame(width: 24, height: 24).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Copy")
                 Button { model.deleteRecord(record) } label: {
-                    Image(systemName: "trash").frame(width: 24, height: 24)
+                    Image(systemName: "trash").frame(width: 24, height: 24).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Delete")
