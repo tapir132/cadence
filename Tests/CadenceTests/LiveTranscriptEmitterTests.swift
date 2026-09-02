@@ -37,6 +37,26 @@ import Testing
     #expect(secondFinal.transcript == inserted)
 }
 
+@Test func aLowercaseDecoderRestartIsCapitalizedAfterSentencePunctuation() throws {
+    var emitter = LiveTranscriptEmitter(dictionaryTerms: ["macOS"])
+    var inserted = ""
+
+    inserted += try emitter.finalize(
+        "The first sentence",
+        continuesAfterPause: true
+    )?.insertion ?? ""
+    inserted += try emitter.consume("the next thought continues")?.insertion ?? ""
+    #expect(inserted == "The first sentence. The next thought")
+
+    let next = try emitter.finalize(
+        "the next thought continues",
+        continuesAfterPause: true
+    )
+    inserted += next?.insertion ?? ""
+    inserted += try emitter.consume("macOS remains mixed case")?.insertion ?? ""
+    #expect(inserted == "The first sentence. The next thought continues. macOS remains mixed")
+}
+
 @Test func grammaticalPauseFlushesTailWithoutInventingASentenceBoundary() throws {
     var emitter = LiveTranscriptEmitter()
     var inserted = ""

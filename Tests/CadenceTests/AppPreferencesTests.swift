@@ -169,3 +169,33 @@ import Testing
     #expect(RecognitionProfile.fast.unifiedConfig.latencyMs == 320)
     #expect(RecognitionProfile.accurate.unifiedConfig.latencyMs == 1_120)
 }
+
+@Test func transcriptDeliveryPreferencesRoundTripAndClampTypingSpeed() throws {
+    let suiteName = "app.cadence.tests.preferences.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    #expect(TranscriptDeliveryPreferences.load(from: defaults) == .defaults)
+
+    let expected = TranscriptDeliveryPreferences(
+        speechCleanupEnabled: true,
+        deepEditingEnabled: true,
+        typingBufferEnabled: true,
+        characterPlaybackEnabled: true,
+        characterPlaybackWordsPerMinute: 95,
+        characterPlaybackTimingVariationEnabled: true
+    )
+    expected.save(to: defaults)
+    #expect(TranscriptDeliveryPreferences.load(from: defaults) == expected)
+
+    defaults.set(10, forKey: "characterPlaybackWordsPerMinute")
+    #expect(
+        TranscriptDeliveryPreferences.load(from: defaults).characterPlaybackWordsPerMinute
+            == CharacterPlaybackPacing.wordsPerMinuteRange.lowerBound
+    )
+    defaults.set(500, forKey: "characterPlaybackWordsPerMinute")
+    #expect(
+        TranscriptDeliveryPreferences.load(from: defaults).characterPlaybackWordsPerMinute
+            == CharacterPlaybackPacing.wordsPerMinuteRange.upperBound
+    )
+}

@@ -193,7 +193,10 @@ struct LiveTranscriptEmitter {
         let punctuated = SpokenPunctuationFormatter.format(cleaned)
         let dictionaryCorrected = DictionaryTermFormatter.apply(to: punctuated, terms: dictionaryTerms)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return SnippetFormatter.format(dictionaryCorrected, snippets: snippets)
+        let sentenceCased = Self.endsInSentenceMark(completedText)
+            ? Self.capitalizingSentenceStart(dictionaryCorrected)
+            : dictionaryCorrected
+        return SnippetFormatter.format(sentenceCased, snippets: snippets)
     }
 
     private func insertionDelta(_ rawDelta: String) -> String {
@@ -273,6 +276,39 @@ struct LiveTranscriptEmitter {
             result.insert(".", at: result.index(after: significant))
         }
         return result
+    }
+
+    /// A reset decoder occasionally begins the next segment with lowercase
+    /// text. Only normalize an all-lowercase first word after text that already
+    /// ends in sentence punctuation; mixed-case dictionary terms such as
+    /// `macOS` and exact snippet replacements remain untouched.
+    private static func capitalizingSentenceStart(_ text: String) -> String {
+        let openers = CharacterSet(charactersIn: "\"'“‘([{")
+        guard let first = text.indices.first(where: { index in
+            let character = text[index]
+            return !character.isWhitespace
+                && !character.unicodeScalars.allSatisfy({ openers.contains($0) })
+        }), text[first].isLetter else { return text }
+
+        let wordEnd = text[first...].firstIndex(where: { !$0.isLetter && $0 != "'" && $0 != "’" })
+            ?? text.endIndex
+        let word = String(text[first..<wordEnd])
+        guard word == word.lowercased() else { return text }
+
+        var result = text
+        result.replaceSubrange(first...first, with: String(text[first]).uppercased())
+        return result
+    }
+
+    private static func endsInSentenceMark(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let closers = CharacterSet(charactersIn: "\"'”’)]}")
+        var significant = text.index(before: text.endIndex)
+        while significant > text.startIndex,
+              text[significant].unicodeScalars.allSatisfy({ closers.contains($0) }) {
+            significant = text.index(before: significant)
+        }
+        return sentenceMarks.contains(text[significant])
     }
 
     private static func join(_ prefix: String, _ suffix: String) -> String {

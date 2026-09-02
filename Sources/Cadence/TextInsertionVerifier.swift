@@ -62,6 +62,50 @@ struct InsertionEvidenceClassifier {
     }
 }
 
+struct InsertedTextRewriteEvidence {
+    let originalValue: String?
+    let currentValue: String?
+    let originalSelection: CFRange?
+    let currentSelection: CFRange?
+}
+
+struct InsertedTextRewritePlanner {
+    /// Returns the exact UTF-16 range occupied by this dictation only when the
+    /// editor still equals the document captured at start with that insertion
+    /// applied and the cursor remains at its expected end.
+    static func selectionRange(
+        for insertedText: String,
+        evidence: InsertedTextRewriteEvidence
+    ) -> CFRange? {
+        guard !insertedText.isEmpty,
+              let originalValue = evidence.originalValue,
+              let currentValue = evidence.currentValue,
+              let originalSelection = evidence.originalSelection,
+              let currentSelection = evidence.currentSelection,
+              originalSelection.location >= 0,
+              originalSelection.length >= 0,
+              originalSelection.location + originalSelection.length <= originalValue.utf16.count
+        else { return nil }
+
+        let expectedValue = (originalValue as NSString).replacingCharacters(
+            in: NSRange(
+                location: originalSelection.location,
+                length: originalSelection.length
+            ),
+            with: insertedText
+        )
+        let expectedEnd = originalSelection.location + insertedText.utf16.count
+        guard currentValue == expectedValue,
+              currentSelection.location == expectedEnd,
+              currentSelection.length == 0 else { return nil }
+
+        return CFRange(
+            location: originalSelection.location,
+            length: insertedText.utf16.count
+        )
+    }
+}
+
 @MainActor
 final class TextInsertionSnapshot {
     fileprivate let processIdentifier: pid_t
@@ -140,6 +184,66 @@ enum TextInsertionVerifier {
         return CFEqual(currentWindow, snapshot.focusedWindow)
     }
 
+    static func currentSelection(_ snapshot: TextInsertionSnapshot) -> CFRange? {
+        guard matchesCurrentElement(snapshot) else { return nil }
+        return selectedRange(of: snapshot.focusedElement)
+    }
+
+    static func selectInsertedText(
+        _ snapshot: TextInsertionSnapshot,
+        insertedText: String
+    ) -> Bool {
+        guard matchesCurrentElement(snapshot),
+              let selection = InsertedTextRewritePlanner.selectionRange(
+                for: insertedText,
+                evidence: rewriteEvidence(for: snapshot)
+              ),
+              setSelection(selection, on: snapshot.focusedElement),
+              let selected = selectedRange(of: snapshot.focusedElement)
+        else { return false }
+        return selected.location == selection.location && selected.length == selection.length
+    }
+
+    static func hasExactInsertedText(
+        _ snapshot: TextInsertionSnapshot,
+        insertedText: String
+    ) -> Bool {
+        guard matchesCurrentElement(snapshot) else { return false }
+        return InsertedTextRewritePlanner.selectionRange(
+            for: insertedText,
+            evidence: rewriteEvidence(for: snapshot)
+        ) != nil
+    }
+
+    static func restoreInsertionPoint(
+        _ snapshot: TextInsertionSnapshot,
+        insertedText: String
+    ) -> Bool {
+        guard matchesCurrentElement(snapshot),
+              let originalValue = snapshot.originalValue,
+              let originalSelection = snapshot.originalSelection,
+              originalSelection.location >= 0,
+              originalSelection.length >= 0,
+              originalSelection.location + originalSelection.length <= originalValue.utf16.count
+        else { return false }
+
+        let expectedValue = (originalValue as NSString).replacingCharacters(
+            in: NSRange(
+                location: originalSelection.location,
+                length: originalSelection.length
+            ),
+            with: insertedText
+        )
+        guard stringValue(of: snapshot.focusedElement) == expectedValue else { return false }
+        return setSelection(
+            CFRange(
+                location: originalSelection.location + insertedText.utf16.count,
+                length: 0
+            ),
+            on: snapshot.focusedElement
+        )
+    }
+
     private static func focusedWindow(processIdentifier: pid_t) -> AXUIElement? {
         let application = AXUIElementCreateApplication(processIdentifier)
         var rawValue: CFTypeRef?
@@ -150,6 +254,12 @@ enum TextInsertionVerifier {
         ) == .success, let rawValue,
               CFGetTypeID(rawValue) == AXUIElementGetTypeID() else { return nil }
         return (rawValue as! AXUIElement)
+    }
+
+    private static func matchesCurrentElement(_ snapshot: TextInsertionSnapshot) -> Bool {
+        guard matchesCurrentTarget(snapshot),
+              let currentElement = focusedElement() else { return false }
+        return CFEqual(currentElement, snapshot.focusedElement)
     }
 
     private static func focusedElement() -> AXUIElement? {
@@ -173,6 +283,32 @@ enum TextInsertionVerifier {
         if let string = rawValue as? String { return string }
         if let attributed = rawValue as? NSAttributedString { return attributed.string }
         return nil
+    }
+
+    private static func rewriteEvidence(for snapshot: TextInsertionSnapshot) -> InsertedTextRewriteEvidence {
+        InsertedTextRewriteEvidence(
+            originalValue: snapshot.originalValue,
+            currentValue: stringValue(of: snapshot.focusedElement),
+            originalSelection: snapshot.originalSelection,
+            currentSelection: selectedRange(of: snapshot.focusedElement)
+        )
+    }
+
+    private static func setSelection(_ range: CFRange, on element: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &settable
+        ) == .success, settable.boolValue else { return false }
+
+        var mutableRange = range
+        guard let value = AXValueCreate(.cfRange, &mutableRange) else { return false }
+        return AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            value
+        ) == .success
     }
 
     private static func selectedRange(of element: AXUIElement) -> CFRange? {

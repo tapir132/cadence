@@ -20,3 +20,23 @@ import Testing
     inserted += try emitter.finalize("I um think this works", continuesAfterPause: false)?.insertion ?? ""
     #expect(inserted == "I think this works.")
 }
+
+@Test func liveFillerCleanupDoesNotRewriteACompletedRestart() {
+    let spoken = "There needs to be like there needs to be like a randomizer."
+    #expect(SpeechCleanupFormatter.format(spoken, enabled: true) == spoken)
+}
+
+@Test func deeperCleanupRepairsTheReportedRestartOnlyAtTheEnd() {
+    let spoken = "There needs to be like there needs to be like a randomizer and then like a words per minute slider. You can toggle. You can toggle. Like. How fast the words per minute is."
+    #expect(
+        DeepSpeechCleanupFormatter.format(spoken, enabled: true)
+            == "There needs to be like a randomizer and then like a words per minute slider. You can toggle how fast the words per minute is."
+    )
+    #expect(DeepSpeechCleanupFormatter.format(spoken, enabled: false) == spoken)
+}
+
+@Test func deeperCleanupPreservesLegitimateSingleWordRepetitionAndLike() {
+    let spoken = "It was very very good. I like that. Had had is unusual but valid."
+    #expect(DeepSpeechCleanupFormatter.format(spoken, enabled: true) == spoken)
+    #expect(DeepSpeechCleanupFormatter.format("Like.", enabled: true) == "Like.")
+}

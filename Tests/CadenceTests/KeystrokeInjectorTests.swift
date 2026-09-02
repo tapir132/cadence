@@ -28,3 +28,31 @@ import Testing
     #expect(KeystrokeInjector.write(transcript, to: pasteboard))
     #expect(pasteboard.string(forType: .string) == transcript)
 }
+
+@Test func characterPlaybackUsesCompleteGraphemesAndStaysSeparateFromChunking() {
+    let text = "A café 👨‍👩‍👧‍👦\n"
+    let characterMode = TextDeliveryMode.characterByCharacter(CharacterPlaybackPacing())
+    #expect(TextDeliveryMode.chunked.units(for: text) == [text])
+    #expect(
+        characterMode.units(for: text) == text.map(String.init)
+    )
+    #expect(
+        characterMode.units(for: "👨‍👩‍👧‍👦").count == 1
+    )
+}
+
+@Test func characterPlaybackPacingUsesWPMAndBoundedVariation() {
+    let steady = CharacterPlaybackPacing(wordsPerMinute: 120)
+    #expect(steady.intervalMilliseconds() == 100)
+
+    let varied = CharacterPlaybackPacing(
+        wordsPerMinute: 120,
+        timingVariationEnabled: true
+    )
+    #expect(varied.intervalMilliseconds(randomUnit: 0) == 85)
+    #expect(varied.intervalMilliseconds(randomUnit: 0.5) == 100)
+    #expect(abs(varied.intervalMilliseconds(randomUnit: 1) - 115) < 0.000_001)
+
+    #expect(CharacterPlaybackPacing(wordsPerMinute: 10).wordsPerMinute == 40)
+    #expect(CharacterPlaybackPacing(wordsPerMinute: 500).wordsPerMinute == 160)
+}

@@ -52,7 +52,15 @@ struct SettingsView: View {
                     line
                     speechCleanupRow
                     line
+                    deepEditingRow
+                    line
                     typingBufferRow
+                    line
+                    characterPlaybackRow
+                    line
+                    characterPlaybackSpeedRow
+                    line
+                    characterPlaybackVariationRow
                 }
                 .settingsSurface()
 
@@ -321,19 +329,120 @@ struct SettingsView: View {
     private var typingBufferRow: some View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("One-second typing buffer").font(.system(size: 13, weight: .semibold))
+                Text("One-second stability buffer").font(.system(size: 13, weight: .semibold))
                 Text("Keeps the preview live, but waits for completed words to remain stable for one extra second before they reach your editor. Pauses and shortcut release still flush immediately.")
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 18)
-            Toggle("One-second typing buffer", isOn: $model.typingBufferEnabled)
+            Toggle("One-second stability buffer", isOn: $model.typingBufferEnabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .accessibilityLabel("One-second typing buffer")
+                .accessibilityLabel("One-second stability buffer")
         }
         .disabled(model.isListening)
+        .padding(16)
+    }
+
+    private var deepEditingRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text("Deeper editing").font(.system(size: 13, weight: .semibold))
+                    Text("BETA")
+                        .font(.system(size: 8, weight: .bold))
+                        .tracking(0.8)
+                        .foregroundStyle(CadenceTheme.muted)
+                }
+                Text("After you finish, removes clear repeated starts and standalone “like” or “you know” fragments. It rewrites only the exact dictation span when the editor can verify it.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Toggle("Deeper editing", isOn: $model.deepEditingEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel("Deeper editing")
+        }
+        .disabled(model.isListening)
+        .padding(16)
+    }
+
+    private var characterPlaybackRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text("Character-by-character typing").font(.system(size: 13, weight: .semibold))
+                    Text("BETA")
+                        .font(.system(size: 8, weight: .bold))
+                        .tracking(0.8)
+                        .foregroundStyle(CadenceTheme.muted)
+                }
+                Text("Delivers committed text one complete character at a time. This changes typing appearance only; recognition and the stability buffer stay independent.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Toggle("Character-by-character typing", isOn: $model.characterPlaybackEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel("Character-by-character typing")
+        }
+        .disabled(model.isListening)
+        .padding(16)
+    }
+
+    private var characterPlaybackSpeedRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Typing speed").font(.system(size: 13, weight: .semibold))
+                Text("Sets the average character pace. Editors that do not expose cursor progress may type more slowly for reliability.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            VStack(alignment: .trailing, spacing: 7) {
+                Text("\(Int(model.characterPlaybackWordsPerMinute.rounded())) WPM")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(CadenceTheme.muted)
+                Slider(
+                    value: $model.characterPlaybackWordsPerMinute,
+                    in: CharacterPlaybackPacing.wordsPerMinuteRange,
+                    step: 5
+                )
+                .tint(CadenceTheme.ink)
+                .frame(width: 220)
+                .accessibilityLabel("Character typing speed")
+                .accessibilityValue("\(Int(model.characterPlaybackWordsPerMinute.rounded())) words per minute")
+            }
+        }
+        .disabled(model.isListening || !model.characterPlaybackEnabled)
+        .padding(16)
+    }
+
+    private var characterPlaybackVariationRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Timing variation").font(.system(size: 13, weight: .semibold))
+                Text("Adds small random timing differences while preserving the selected average speed. It never adds mistakes or correction behavior.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Toggle(
+                "Timing variation",
+                isOn: $model.characterPlaybackTimingVariationEnabled
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .accessibilityLabel("Timing variation")
+        }
+        .disabled(model.isListening || !model.characterPlaybackEnabled)
         .padding(16)
     }
 

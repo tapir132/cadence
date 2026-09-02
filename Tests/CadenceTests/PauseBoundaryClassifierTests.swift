@@ -21,6 +21,14 @@ import Testing
     #expect(PauseBoundaryClassifier.classify("This is probably complete") == .uncertain)
 }
 
+@Test func naturalThinkingFragmentsStayOpenUntilTheirPredicateArrives() {
+    #expect(PauseBoundaryClassifier.classify("A lot of the text, like") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("But the whole") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("The whole point of the app") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("Is that") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("I like that") == .uncertain)
+}
+
 @Test func spokenPunctuationIsClassifiedAfterFormatting() {
     let emitter = LiveTranscriptEmitter()
     #expect(emitter.pauseBoundaryDecision(for: "Finish this period") == .complete)

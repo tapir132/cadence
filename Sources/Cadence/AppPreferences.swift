@@ -23,6 +23,72 @@ enum RecognitionProfile: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
+struct TranscriptDeliveryPreferences: Equatable {
+    static let defaults = TranscriptDeliveryPreferences(
+        speechCleanupEnabled: false,
+        deepEditingEnabled: false,
+        typingBufferEnabled: false,
+        characterPlaybackEnabled: false,
+        characterPlaybackWordsPerMinute: CharacterPlaybackPacing.defaultWordsPerMinute,
+        characterPlaybackTimingVariationEnabled: false
+    )
+
+    let speechCleanupEnabled: Bool
+    let deepEditingEnabled: Bool
+    let typingBufferEnabled: Bool
+    let characterPlaybackEnabled: Bool
+    let characterPlaybackWordsPerMinute: Double
+    let characterPlaybackTimingVariationEnabled: Bool
+
+    init(
+        speechCleanupEnabled: Bool,
+        deepEditingEnabled: Bool,
+        typingBufferEnabled: Bool,
+        characterPlaybackEnabled: Bool,
+        characterPlaybackWordsPerMinute: Double,
+        characterPlaybackTimingVariationEnabled: Bool
+    ) {
+        self.speechCleanupEnabled = speechCleanupEnabled
+        self.deepEditingEnabled = deepEditingEnabled
+        self.typingBufferEnabled = typingBufferEnabled
+        self.characterPlaybackEnabled = characterPlaybackEnabled
+        self.characterPlaybackWordsPerMinute = CharacterPlaybackPacing(
+            wordsPerMinute: characterPlaybackWordsPerMinute
+        ).wordsPerMinute
+        self.characterPlaybackTimingVariationEnabled = characterPlaybackTimingVariationEnabled
+    }
+
+    static func load(from defaults: UserDefaults) -> TranscriptDeliveryPreferences {
+        TranscriptDeliveryPreferences(
+            speechCleanupEnabled: defaults.bool(forKey: "speechCleanupEnabled"),
+            deepEditingEnabled: defaults.bool(forKey: "deepEditingEnabled"),
+            typingBufferEnabled: defaults.bool(forKey: "typingBufferEnabled"),
+            characterPlaybackEnabled: defaults.bool(forKey: "characterPlaybackEnabled"),
+            characterPlaybackWordsPerMinute: defaults.object(
+                forKey: "characterPlaybackWordsPerMinute"
+            ) as? Double ?? Self.defaults.characterPlaybackWordsPerMinute,
+            characterPlaybackTimingVariationEnabled: defaults.bool(
+                forKey: "characterPlaybackTimingVariationEnabled"
+            )
+        )
+    }
+
+    func save(to defaults: UserDefaults) {
+        defaults.set(speechCleanupEnabled, forKey: "speechCleanupEnabled")
+        defaults.set(deepEditingEnabled, forKey: "deepEditingEnabled")
+        defaults.set(typingBufferEnabled, forKey: "typingBufferEnabled")
+        defaults.set(characterPlaybackEnabled, forKey: "characterPlaybackEnabled")
+        defaults.set(
+            characterPlaybackWordsPerMinute,
+            forKey: "characterPlaybackWordsPerMinute"
+        )
+        defaults.set(
+            characterPlaybackTimingVariationEnabled,
+            forKey: "characterPlaybackTimingVariationEnabled"
+        )
+    }
+}
+
 enum BarPlacement: String, CaseIterable, Codable, Identifiable {
     case bottom
     case top

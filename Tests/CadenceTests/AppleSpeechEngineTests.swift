@@ -168,6 +168,45 @@ func streamingModelKeepsContextAcrossAMidSentencePause() async throws {
     #expect(recorder.insertedText.lowercased() == final)
 }
 
+/// Exact regression for a natural thinking pause that previously split a
+/// noun phrase from its predicate: "The whole point of the app. Is that …".
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_STREAMING_MODEL_TEST"] == "1"))
+func streamingModelKeepsANounPhraseOpenAcrossAThinkingPause() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cadence-thinking-pause-test-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let subjectURL = directory.appendingPathComponent("subject.aiff")
+    let predicateURL = directory.appendingPathComponent("predicate.aiff")
+    try synthesize("The whole point of the app", to: subjectURL)
+    try synthesize("is that it looks like normal dictation", to: predicateURL)
+    let subjectSamples = try AudioConverter().resampleAudioFile(subjectURL)
+        + Array(repeating: Float.zero, count: 48_000)
+    let predicateSamples = try AudioConverter().resampleAudioFile(predicateURL)
+        + Array(repeating: Float.zero, count: 16_000)
+
+    let transcriber = LiveSpeechTranscriber()
+    try await transcriber.prepare(profile: .accurate) { _ in }
+    let (audio, continuation) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
+    let recorder = LiveUpdateRecorder()
+    let transcription = Task {
+        try await transcriber.transcribe(audio) { update in recorder.record(update) }
+    }
+
+    yieldSamples(subjectSamples, to: continuation)
+    _ = try #require(await recorder.waitForInsertedSuffix("point of the app"))
+    yieldSamples(predicateSamples, to: continuation)
+    continuation.finish()
+
+    let final = try await transcription.value.lowercased()
+    #expect(
+        final == "the whole point of the app is that it looks like normal dictation.",
+        "Updates: \(recorder.snapshot())"
+    )
+    #expect(recorder.insertedText.lowercased() == final)
+}
+
 /// The Accurate selector uses a different streaming context encoder. Exercise
 /// the real download/load path so the Settings choice cannot appear to work
 /// while silently leaving the Fast profile active.

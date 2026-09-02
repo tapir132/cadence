@@ -24,7 +24,7 @@ Live essay dictation needs a narrower guarantee than “every partial is final�
 
 - show the current hypothesis in the floating preview;
 - insert completed words continuously;
-- never rewrite text already inserted into another application;
+- never rewrite text during live emission; an opt-in final cleanup may replace only the exactly verified span inserted by this session;
 - after a sentence pause, flush the held last word and punctuation;
 - continue the same held session with the next sentence;
 - keep accepting audio for long sessions without task expiry or callback reordering.
@@ -41,7 +41,7 @@ The pinned FluidAudio manager can load an additional CTC model for vocabulary bo
 
 [Google's primary study of streaming ASR stability](https://research.google/pubs/analyzing-the-quality-and-stability-of-a-streaming-end-to-end-on-device-speech-recognizer/) confirms that partial results can be revised before finalization. A streaming hypothesis can also expose an unfinished subword—for example, `dict` before `dictation`. `LiveTranscriptEmitter` therefore holds the final whitespace-delimited word and any attached punctuation. When the next word boundary appears, the completed word becomes an insertion delta. A sentence pause finalizes the held tail. The floating bar remains free to show the provisional text, so the preview can be slightly ahead of the editor without risking a broken fragment in the document.
 
-The optional one-second typing buffer is implemented at this stability boundary, not as a timer in front of Command-V. Each safe prefix records when it first appeared. It becomes immutable only after the exact prefix has survived for one additional second; a contradicted, still-unpasted checkpoint is discarded. Each word keeps its own first-seen time, so the stream continues moving instead of batching an entire sentence. A VAD pause or shortcut release still flushes the current tail immediately, preventing the old missing-final-words failure from returning.
+The optional one-second stability buffer is implemented at this stability boundary, not as a timer in front of Command-V. Each safe prefix records when it first appeared. It becomes immutable only after the exact prefix has survived for one additional second; a contradicted, still-unpasted checkpoint is discarded. Each word keeps its own first-seen time, so the stream continues moving instead of batching an entire sentence. A VAD pause or shortcut release still flushes the current tail immediately, preventing the old missing-final-words failure from returning. Character playback is a separate downstream choice: turning it off never disables the recognition buffer, and turning it on paces any newly committed prefix one complete grapheme at a time.
 
 Committed words are inserted without trailing whitespace; the next committed word supplies its own leading separator. This makes it possible to append a period correctly even if a later hypothesis withdraws the provisional word that had followed the visible text. A revision is an error only when the new hypothesis no longer preserves the exact character prefix already inserted into the document.
 
@@ -63,7 +63,7 @@ Version one intentionally stores and inserts plain text. AppKit supports RTF and
 
 [FluidAudio's Silero streaming VAD](https://github.com/FluidInference/FluidAudio/blob/4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b/Sources/FluidAudio/VAD/VadManager%2BStreaming.swift) uses hysteresis and a default 750 ms minimum silence duration. Cadence uses its speech-start signal to keep leading background silence out of ASR while retaining a short pre-roll so the first phoneme is not clipped.
 
-The 750 ms VAD event means “speech paused,” not “the thought is grammatically complete.” Treating those concepts as identical produced `Because my Apple dictation. Was messing…`. A minimal model experiment fed those phrases through one uninterrupted Unified stream with 1.5 seconds of silence; it returned `Because my Apple dictation was messing…`, preserving the intended context and capitalization.
+The 750 ms VAD event means “speech paused,” not “the thought is grammatically complete.” Treating those concepts as identical produced `Because my Apple dictation. Was messing…`. A minimal model experiment fed those phrases through one uninterrupted Unified stream with 1.5 seconds of silence; it returned `Because my Apple dictation was messing…`, preserving the intended context and capitalization. A second production regression reproduced `The whole point of the app. Is that…` with Accurate recognition and a three-second thinking pause. The model's live partial contained no period; Cadence's uncertain-boundary fallback invented it. The classifier now uses Apple's local lexical tagging to keep a multiword phrase with no verb open for its predicate, and recognizes a trailing complement such as `is that` without misclassifying the complete phrase `I like that`.
 
 On speech end, Cadence now:
 
@@ -94,11 +94,17 @@ Releasing the shortcut flushes the active final segment in the same way. Audio t
 |---|---|
 | Per-character Unicode `CGEvent` | Rejected. Application frameworks may ignore the payload, and a long event queue creates more tail-loss opportunities. |
 | Replace `kAXValueAttribute` | Rejected as a universal route. It is not writable for every control and can damage selection, rich text, or editor undo semantics. |
-| Pasteboard plus physical Command-V | Selected. [`NSPasteboard`](https://developer.apple.com/documentation/appkit/nspasteboard) is the transfer mechanism editors already support, while Command-V invokes each editor's native insertion path. |
+| Pasteboard plus physical Command-V | Selected. [`NSPasteboard`](https://developer.apple.com/documentation/appkit/nspasteboard) is the transfer mechanism editors already support, while Command-V invokes each editor's native insertion path. The same route can safely deliver either a committed text delta or one complete grapheme at a time. |
 
 A current open-source macOS dictation implementation, [Presspeech](https://github.com/rcourtman/presspeech), independently uses the same basic route: write text to the general pasteboard and post explicit Command-down, V-down, V-up, and Command-up events.
 
-Cadence now sends each completed-word delta through a single serialized queue. It waits 120 ms after each physical paste sequence so a later pasteboard write cannot replace the word before the target consumes the earlier Command-V. The target process and opaque focused AX window captured at session start are checked before every paste and again immediately before V-down. If focus changes, Cadence fails closed, leaves recoverable text on the clipboard, and never redirects private dictation into a different window.
+Cadence now sends insertion units through a single serialized queue. Normal delivery keeps each committed delta intact. Optional character playback expands the same delta into Swift `Character` values, preserving composed accents and emoji as complete graphemes. Its WPM control follows the five-character word convention, with a 40–160 WPM range. Optional variation is a bounded uniform ±15% interval adjustment whose midpoint remains the selected average.
+
+The original 35 ms implementation reproduced a real Safari failure end to end: Cadence's saved transcript contained `definitely` and `The`, while the focused web editor visibly received `definitel` and `Te`. A trusted-process Safari stress experiment then delivered only 750 of 1,140 expected characters when it replaced the pasteboard and posted consecutive Command-V sequences at that cadence. The queue now treats accessible cursor advancement as an acknowledgment, retries an unchanged character up to twice, and stops with full-transcript recovery rather than silently skipping after repeated failure. An opaque editor uses at least the conservative 120 ms timeout and may therefore run below the selected WPM. The target process and opaque focused AX window captured at session start are checked before every paste and again immediately before V-down. If focus changes, Cadence fails closed and drops the remaining queue rather than redirecting private dictation into a different window.
+
+Every injected pasteboard item is marked [`currentHostOnly`](https://developer.apple.com/documentation/appkit/nspasteboard/contentsoptions/currenthostonly), so a paced sequence does not send each private character through Universal Clipboard. Cadence records no typing samples or biometric profile, and never adds fake mistakes or correction behavior. Timing variation is generated locally per character within a fixed bound; it is a presentation control, not identity imitation.
+
+Deeper editing introduces one deliberately bounded editor-revision path. It computes the cleaned transcript locally, then requires the current document value and cursor to equal the start snapshot with the raw dictation inserted. Apple defines [`kAXSelectedTextRangeAttribute`](https://developer.apple.com/documentation/applicationservices/kaxselectedtextrangeattribute) as the character range for editable text, and [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) reports unsupported or invalid elements instead of guaranteeing mutation. Cadence therefore selects only the proven dictation span, replaces it with the editor's standard Command-V action, verifies the resulting value and cursor, and otherwise leaves the raw transcript in place. It never writes the editor's whole `kAXValueAttribute`.
 
 Every event in that Command-V sequence is source-tagged. This prevents the shortcut monitor from confusing Cadence's synthetic Command-down/up with release of a physically held modifier-only shortcut, without suppressing any real keyboard event.
 
@@ -116,7 +122,7 @@ The human download is the DMG. Sparkle remains ZIP-backed because its appcast al
 
 Wispr Flow's advantage is not only raw ASR. Its [context-awareness documentation](https://docs.wisprflow.ai/articles/4678293671-Context-Awareness) says it uses the active application and limited text near the cursor to adapt vocabulary, style, and formatting. Its [privacy/cloud documentation](https://docs.wisprflow.ai/articles/4709791908-understanding-privacy-mode-and-cloud-sync) describes cloud processing and personalized models.
 
-Cadence now has a low-latency local streaming baseline, but it does not claim parity with that cloud/context pipeline. It deliberately does not read the surrounding essay, upload microphone audio, or run an LLM rewrite. Its local boundary classifier considers the recognized fragment and pause duration, and its optional cleanup removes filler sounds before insertion. The personal dictionary restores exact case and diacritics only for the same decoded letters; fuzzy substitution is avoided because it can invent words without acoustic evidence.
+Cadence now has a low-latency local streaming baseline, but it does not claim parity with that cloud/context pipeline. It deliberately does not read the surrounding essay, upload microphone audio, or run an LLM rewrite. Its local boundary classifier considers the recognized fragment and pause duration. Pre-insertion cleanup removes only filler sounds; the separate opt-in end pass recognizes exact adjacent repeats and a short, documented set of discourse fragments. The personal dictionary restores exact case and diacritics only for the same decoded letters; fuzzy substitution is avoided because it can invent words without acoustic evidence.
 
 ## Native architecture
 
@@ -142,8 +148,9 @@ LiveTranscriptEmitter
                │
                ▼
 KeystrokeInjector (one serialized paste queue)
+      ├── choose committed delta or complete-grapheme units
       ├── verify captured process + window
-      ├── write one NSPasteboard delta
+      ├── write one current-host-only NSPasteboard unit
       ├── verify focus immediately before V-down
       └── post Command↓ V↓ V↑ Command↑
                │
@@ -160,7 +167,7 @@ The opt-in production regressions synthesize speech and drive the real ASR/VAD p
 
 A separate regression reuses one `AVAudioConverter` over sixty consecutive tap buffers. Its input provider returns `.noDataNow` after supplying each buffer; returning `.endOfStream` would terminally close that reusable converter and recreate the observed “works at first, then stops” failure.
 
-The paste path is separately exercised against a real AppKit editor using the signed installed application, because pasteboard state and event construction alone do not prove visible insertion.
+The paste path is separately exercised against a real AppKit editor using the signed installed application, because pasteboard state, queue contents, and event construction alone do not prove visible insertion. Character playback additionally verifies ordered visible insertion of ASCII, composed Unicode, emoji, whitespace, and punctuation.
 
 The modifier-only regression recreates an Option-held session, passes the complete tagged Command-V sequence through the same AppKit event handler, and verifies that only an untagged Option-up releases the shortcut. Installed-app verification then holds Option across two spoken sentences and a pause, requiring timestamped visible editor updates during both sentences before releasing Option.
 
@@ -174,9 +181,9 @@ Snippet regressions cover exact whole-phrase matching, case and diacritics, inco
 - A one-time ASR/VAD model download and compilation is required before dictation becomes ready.
 - Words appear after a following boundary confirms they are complete, so preview text can lead editor text by roughly one word.
 - Tail words flush after approximately 750 ms of silence. Terminal punctuation can take up to roughly another 512 ms for an uncertain boundary; a clear dependent clause remains open for the next phrase or shortcut release.
-- Filler cleanup is conservative. Cadence cannot safely interpret free-form corrections such as “forget that” after the referenced words have already been inserted without introducing an editor-revision path.
+- Live filler cleanup is conservative. Deeper editing can revise only an exactly verified dictation span and still does not interpret free-form commands such as “forget that.”
 - Snippets are exact plain-text macros. Rich formatting needs attributed-run provenance and multiple pasteboard representations before it can be promised consistently across editors.
-- Personalized character-by-character playback remains research. Apple's Unicode-event documentation says application frameworks may ignore synthetic Unicode payloads, while typing timing, dwell, flight, and digraph features are studied as a behavioral biometric. Any future calibration must be explicit, local, resettable, timing-only by default, and use a delivery mechanism that survives real-editor tests.
+- Character playback and timing variation are opt-in. Cadence deliberately does not learn or imitate a person's keystroke biometrics, inject fake mistakes, or promise that every editor will group per-character paste operations into the same undo history as physical typing.
 - No cloud LLM rewrite, accounts, sync, document-context reading, or audio retention.
 - The transcript remains on the clipboard after insertion, favoring recoverability over transparent clipboard restoration.
 - Secure fields and applications that reject synthetic shortcuts may still refuse insertion; Cadence preserves the transcript and reports definite failures.

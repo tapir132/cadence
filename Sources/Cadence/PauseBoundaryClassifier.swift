@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 enum PauseBoundaryDecision: Equatable {
     /// Punctuation from the live model is strong enough to close immediately.
@@ -38,6 +39,15 @@ enum PauseBoundaryClassifier {
             return .continuation
         }
 
+        // A trailing "that" after a linking or reporting verb introduces a
+        // complement; it is not the end of the thought. Keep cases such as
+        // "I like that" uncertain rather than treating every final "that" as
+        // incomplete.
+        if words.last == "that",
+           words.dropLast().contains(where: complementIntroducingVerbs.contains) {
+            return .continuation
+        }
+
         // A leading dependent clause normally needs a comma and an independent
         // clause before it can stand alone. This directly covers pauses such as
         // "Because my Apple dictation …" without delaying every sentence.
@@ -46,7 +56,30 @@ enum PauseBoundaryClassifier {
             return .continuation
         }
 
+        // Long thinking pauses often land between a subject and its predicate:
+        // "The whole point of the app … is that …". Apple's local lexical
+        // tagger gives us a conservative way to recognize a multiword phrase
+        // with no verb and preserve decoder context until speech resumes.
+        if words.count > 1, !containsVerb(in: text) { return .continuation }
+
         return .uncertain
+    }
+
+    private static func containsVerb(in text: String) -> Bool {
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = text
+        tagger.setLanguage(.english, range: text.startIndex..<text.endIndex)
+        var found = false
+        tagger.enumerateTags(
+            in: text.startIndex..<text.endIndex,
+            unit: .word,
+            scheme: .lexicalClass,
+            options: [.omitPunctuation, .omitWhitespace]
+        ) { tag, _ in
+            found = tag == .verb
+            return !found
+        }
+        return found
     }
 
     private static func significantTerminal(in text: String) -> Character? {
@@ -83,6 +116,13 @@ enum PauseBoundaryClassifier {
         ["rather", "than"],
         ["so", "that"],
         ["such", "as"]
+    ]
+
+    private static let complementIntroducingVerbs: Set<String> = [
+        "are", "believe", "believes", "feel", "feels", "felt", "hope",
+        "hoped", "hopes", "is", "know", "knows", "knew", "mean", "means",
+        "meant", "said", "say", "says", "think", "thinks", "thought", "was",
+        "were"
     ]
 
     private static let leadingDependentPhrases: [[String]] = [

@@ -45,6 +45,7 @@ final class AppModel: ObservableObject {
     @Published var shortcut: ShortcutBinding = .standard {
         didSet {
             saveSettings()
+            guard settingsAreLoaded else { return }
             GlobalHotKey.shared.binding = shortcut
         }
     }
@@ -53,13 +54,19 @@ final class AppModel: ObservableObject {
     @Published var recognitionProfile: RecognitionProfile = .fast {
         didSet {
             saveSettings()
-            guard recognitionProfile != oldValue else { return }
+            guard settingsAreLoaded, recognitionProfile != oldValue else { return }
             speechModelStatus = .preparing(progress: nil)
             Task { [weak self] in await self?.prepareSpeechModel() }
         }
     }
     @Published var speechCleanupEnabled = false { didSet { saveSettings() } }
+    @Published var deepEditingEnabled = false { didSet { saveSettings() } }
     @Published var typingBufferEnabled = false { didSet { saveSettings() } }
+    @Published var characterPlaybackEnabled = false { didSet { saveSettings() } }
+    @Published var characterPlaybackWordsPerMinute = CharacterPlaybackPacing.defaultWordsPerMinute {
+        didSet { saveSettings() }
+    }
+    @Published var characterPlaybackTimingVariationEnabled = false { didSet { saveSettings() } }
     @Published private(set) var freeBarX = 0.5
     @Published private(set) var freeBarY = 0.0
 
@@ -72,6 +79,7 @@ final class AppModel: ObservableObject {
     private var insertionSnapshot: TextInsertionSnapshot?
     private var insertionVerificationTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
+    private var settingsAreLoaded = false
 
     var isListening: Bool { state == .listening || state == .finishing }
     var lastTranscript: String { records.first?.text ?? "" }
@@ -99,8 +107,14 @@ final class AppModel: ObservableObject {
            let saved = RecognitionProfile(rawValue: raw) {
             recognitionProfile = saved
         }
-        speechCleanupEnabled = UserDefaults.standard.bool(forKey: "speechCleanupEnabled")
-        typingBufferEnabled = UserDefaults.standard.bool(forKey: "typingBufferEnabled")
+        let deliveryPreferences = TranscriptDeliveryPreferences.load(from: .standard)
+        speechCleanupEnabled = deliveryPreferences.speechCleanupEnabled
+        deepEditingEnabled = deliveryPreferences.deepEditingEnabled
+        typingBufferEnabled = deliveryPreferences.typingBufferEnabled
+        characterPlaybackEnabled = deliveryPreferences.characterPlaybackEnabled
+        characterPlaybackWordsPerMinute = deliveryPreferences.characterPlaybackWordsPerMinute
+        characterPlaybackTimingVariationEnabled = deliveryPreferences
+            .characterPlaybackTimingVariationEnabled
         freeBarX = UserDefaults.standard.object(forKey: "freeBarX") as? Double ?? 0.5
         freeBarY = UserDefaults.standard.object(forKey: "freeBarY") as? Double ?? 0
         if UserDefaults.standard.integer(forKey: "floatingBarDesignVersion") < 2 {
@@ -109,6 +123,7 @@ final class AppModel: ObservableObject {
             freeBarY = 0
             UserDefaults.standard.set(2, forKey: "floatingBarDesignVersion")
         }
+        settingsAreLoaded = true
         Task { [weak self] in await self?.prepareSpeechModel() }
     }
 
@@ -188,7 +203,10 @@ final class AppModel: ObservableObject {
         insertionVerificationTask?.cancel()
         insertionRecovery = nil
         insertionSnapshot = TextInsertionVerifier.capture()
-        injector.beginSession(target: insertionSnapshot)
+        injector.beginSession(
+            target: insertionSnapshot,
+            deliveryMode: textDeliveryMode
+        )
         startedAt = Date()
         state = .listening
 
@@ -240,6 +258,8 @@ final class AppModel: ObservableObject {
     func cancelDictation() {
         transcriptionTask?.cancel()
         transcriptionTask = nil
+        insertionVerificationTask?.cancel()
+        insertionVerificationTask = nil
         speechEngine.cancel()
         injector.cancelPending()
         state = .idle
@@ -374,17 +394,27 @@ final class AppModel: ObservableObject {
     func pasteLastTranscript() {
         guard !lastTranscript.isEmpty else { return }
         let snapshot = TextInsertionVerifier.capture()
-        injector.beginSession(target: snapshot)
+        injector.beginSession(
+            target: snapshot,
+            deliveryMode: textDeliveryMode
+        )
         injector.enqueue(lastTranscript)
     }
 
     func saveSettings() {
+        guard settingsAreLoaded else { return }
         if let data = try? JSONEncoder().encode(shortcut) { UserDefaults.standard.set(data, forKey: "shortcut") }
         UserDefaults.standard.set(barPlacement.rawValue, forKey: "barPlacement")
         UserDefaults.standard.set(barScale, forKey: "barScale")
         UserDefaults.standard.set(recognitionProfile.rawValue, forKey: "recognitionProfile")
-        UserDefaults.standard.set(speechCleanupEnabled, forKey: "speechCleanupEnabled")
-        UserDefaults.standard.set(typingBufferEnabled, forKey: "typingBufferEnabled")
+        TranscriptDeliveryPreferences(
+            speechCleanupEnabled: speechCleanupEnabled,
+            deepEditingEnabled: deepEditingEnabled,
+            typingBufferEnabled: typingBufferEnabled,
+            characterPlaybackEnabled: characterPlaybackEnabled,
+            characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
+            characterPlaybackTimingVariationEnabled: characterPlaybackTimingVariationEnabled
+        ).save(to: .standard)
     }
 
     func saveFreeBarPosition(x: Double, y: Double) {
@@ -401,6 +431,16 @@ final class AppModel: ObservableObject {
     }
 
     private var isError: Bool { hasError }
+
+    private var textDeliveryMode: TextDeliveryMode {
+        guard characterPlaybackEnabled else { return .chunked }
+        return .characterByCharacter(
+            CharacterPlaybackPacing(
+                wordsPerMinute: characterPlaybackWordsPerMinute,
+                timingVariationEnabled: characterPlaybackTimingVariationEnabled
+            )
+        )
+    }
 
     private func prepareSpeechModel() async {
         let profile = recognitionProfile
@@ -439,40 +479,94 @@ final class AppModel: ObservableObject {
         let finalText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = insertionSnapshot
         let completedTargetAppName = targetAppName
+        let shouldDeepEdit = deepEditingEnabled
         insertionSnapshot = nil
         let duration = max(Date().timeIntervalSince(startedAt ?? Date()), 1)
-        if !finalText.isEmpty {
-            let record = DictationRecord(
-                id: UUID(), date: Date(), text: finalText, appName: targetAppName,
-                duration: duration, wordsPerMinute: Int((Double(finalText.wordCount) / duration) * 60)
-            )
-            records.insert(record, at: 0)
-            records = Array(records.prefix(100))
-            persistRecords()
-            liveText = finalText
-        }
-        state = .idle
-        startedAt = nil
-        audioLevel = 0
-
         let insertedText = committedText
-        guard !insertedText.isEmpty else { return }
+        guard !insertedText.isEmpty else {
+            storeCompletedRecord(
+                finalText,
+                appName: completedTargetAppName,
+                duration: duration
+            )
+            state = .idle
+            startedAt = nil
+            audioLevel = 0
+            return
+        }
         insertionVerificationTask?.cancel()
         insertionVerificationTask = Task { [weak self] in
             guard let self else { return }
             await injector.waitUntilDrained()
             guard !Task.isCancelled else { return }
+
+            var deliveredText = finalText
+            var verificationText = insertedText
+            var recoveryText = finalText
+            let editedText = DeepSpeechCleanupFormatter.format(
+                finalText,
+                enabled: shouldDeepEdit
+            )
+            if shouldDeepEdit,
+               insertedText == finalText,
+               editedText != finalText {
+                switch await injector.replaceInsertedText(
+                    insertedText,
+                    with: editedText
+                ) {
+                case .applied:
+                    deliveredText = editedText
+                    verificationText = editedText
+                    recoveryText = editedText
+                case .skipped:
+                    break
+                case .failed:
+                    recoveryText = editedText
+                }
+            }
+
+            storeCompletedRecord(
+                deliveredText,
+                appName: completedTargetAppName,
+                duration: duration
+            )
+            committedText = deliveredText
+            if state == .finishing {
+                state = .idle
+                startedAt = nil
+                audioLevel = 0
+            }
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
             let result = TextInsertionVerifier.verify(
                 snapshot,
-                insertedText: insertedText,
+                insertedText: verificationText,
                 postingFailed: injector.hadPostingFailure
             )
             if result == .failed {
-                insertionRecovery = InsertionRecovery(text: finalText, appName: completedTargetAppName)
+                insertionRecovery = InsertionRecovery(
+                    text: recoveryText,
+                    appName: completedTargetAppName
+                )
             }
         }
+    }
+
+    private func storeCompletedRecord(
+        _ text: String,
+        appName: String,
+        duration: TimeInterval
+    ) {
+        guard !text.isEmpty else { return }
+        let record = DictationRecord(
+            id: UUID(), date: Date(), text: text, appName: appName,
+            duration: duration,
+            wordsPerMinute: Int((Double(text.wordCount) / duration) * 60)
+        )
+        records.insert(record, at: 0)
+        records = Array(records.prefix(100))
+        persistRecords()
+        liveText = text
     }
 
     private func failTranscription(_ error: Error) {

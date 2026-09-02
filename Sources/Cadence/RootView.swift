@@ -145,7 +145,7 @@ struct RootView: View {
         case .listening:
             ("Listening now", CadenceTheme.coral)
         case .finishing:
-            ("Finishing sentence…", CadenceTheme.coral)
+            ("Finishing dictation…", CadenceTheme.coral)
         case .error:
             ("Needs attention", CadenceTheme.coral)
         case .idle:
