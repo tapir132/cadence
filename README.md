@@ -2,14 +2,18 @@
 
 Cadence is a native macOS dictation app that transcribes locally and types completed words live into the focused application. It keeps only the unfinished frontier word provisional, flushes the tail on a pause, and uses punctuation, grammar, and pause length to decide whether the sentence is actually over.
 
+[Public usage statistics](https://github.com/tapir132/cadence/issues?q=is%3Aissue%20label%3Ausage-stats) show GitHub release downloads, update fetches, and repository interest without adding analytics to the app.
+
 ## Features
 
 - Live on-device English transcription with NVIDIA Parakeet Unified 0.6B through FluidAudio
 - Append-only word emission with context-aware sentence boundaries after a pause
 - Continuous pause rollover, including punctuation and speech in later sentences
 - Fast (320 ms) and Accurate (1.12 s) local recognition profiles
-- Optional filler-word cleanup for hesitation sounds such as “um” and “uh”
-- Optional end-of-dictation cleanup for clear repeated starts and standalone discourse fillers
+- Responsive, Natural, and Polished setup profiles with complete manual controls under Advanced
+- Optional context-aware filler cleanup for vocal pauses and detached discourse asides
+- Optional logic-driven end-of-dictation repair for repeated starts, editing terms, and false sentence boundaries
+- Spoken punctuation, paragraph, and common correspondence formatting commands
 - Reliable standard clipboard pastes instead of lossy synthetic Unicode events
 - Optional character-by-character delivery with adjustable WPM and bounded timing variation
 - Focus-bound delivery that refuses to paste after the user changes windows
@@ -31,7 +35,7 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Microphone access
 - Accessibility access for pasting into other applications
 
-The current release build is optimized for Apple Silicon. On first launch Cadence downloads and prepares the English speech and voice-activity models (roughly 600 MB total); later transcription runs locally without sending microphone audio to a speech service. Selecting Accurate downloads one additional local encoder the first time it is used.
+The current release build is optimized for Apple Silicon. On first launch Cadence downloads and prepares the English speech and voice-activity models (roughly 600 MB total); later transcription runs locally without sending microphone audio to a speech service. Selecting Accurate downloads one additional local encoder the first time it is used. Cadence keeps both encoders warm after that first preparation, so later Fast/Accurate switches do not reload a 565 MB model.
 
 ## Build and run
 
@@ -68,7 +72,7 @@ Cadence re-checks these every few seconds while Settings is open, so changes mad
 
 Place the cursor in an editor, hold the configured shortcut while you speak, and release it to finish. The default is **Control–Option–Space**; a function key or a modifier-only chord such as ⌃⌥ works too.
 
-Say **“period”**, **“full stop”**, or **“question mark”** to insert `.`, `.`, or `?` instead of the command words. These commands follow the convention used by macOS Dictation.
+Say **“period”**, **“full stop”**, **“comma”**, **“question mark”**, **“new line”**, or **“new paragraph”** to format text instead of typing the command words. Cadence also writes an honorific such as “doctor Solarz” as “Dr. Solarz.” These follow the conventions used by macOS Dictation.
 
 The floating bar can stop or cancel dictation without activating the main Cadence window. When idle, it collapses into a slim edge-aware handle and expands when hovered. Drag the expanded logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement. Double-click the logo to open Cadence; a single click never opens the app.
 
@@ -78,11 +82,11 @@ Cadence captures 16 kHz mono audio for as long as the shortcut is held. Silero v
 
 After about 750 ms of speech-ending silence, Cadence inserts the sentence tail and classifies the boundary. Explicit or model-supplied terminal punctuation closes immediately. A dependent clause such as “Because my Apple dictation…” and a subject still waiting for its predicate, such as “The whole point of the app…”, keep the same decoder stream and language context when speech resumes. Other uncertain fragments get a short grace window; if silence continues, Cadence closes them with punctuation and starts a fresh stream without ending the held shortcut. Releasing the shortcut finalizes any open thought. If a reset decoder returns lowercase text after a real sentence mark, Cadence restores the initial capital before insertion.
 
-Personal-dictionary matching occurs before text becomes visible. Cadence can therefore hold a possible multiword name briefly and safely restore exact case and diacritics—for example, `Jose Arcadio Buendia` to `José Arcadio Buendía`—without editing text after it was pasted. Optional filler-word cleanup also runs at this pre-insertion stage. It is intentionally conservative and does not rewrite earlier prose or interpret “forget that” as a destructive edit.
+Personal-dictionary matching occurs before text becomes visible. Cadence can therefore hold a possible multiword name briefly and safely restore exact case and diacritics—for example, `Jose Arcadio Buendia` to `José Arcadio Buendía`—without editing text after it was pasted. It deliberately does not fuzzily turn a different decoded word such as `lamp` into `Liam`; use Accurate for more acoustic context, and save a dictionary entry to preserve spelling once the model hears the right name. Optional filler cleanup also runs at this pre-insertion stage. It removes unmistakable vocal pauses, while words such as “like,” “well,” and “you know” are removed only when punctuation marks them as detached asides. Semantic uses such as “I like this” remain untouched.
 
-The separate Deeper editing option runs only after the shortcut is released. It removes exact adjacent repeated phrases, standalone “like” or “you know” fragments, and a narrow set of clearly split complements. Before changing visible text, Cadence proves that the focused editor still contains exactly the document captured at dictation start plus this transcript, selects only that UTF-16 span through Accessibility, and replaces it through the editor's normal paste command. If the editor is opaque, focus moved, the cursor moved, or any surrounding text changed, Cadence leaves the original dictation untouched.
+The separate Deeper editing option runs only after the shortcut is released. It models a repair as abandoned words, an optional editing term, and a replacement. Repeated multiword anchors support safe removal of starts such as “I think we should—I mean—I think we can,” while the sentence-boundary classifier rejoins a noun phrase or modal complement that was clearly split during a thinking pause. Ambiguous corrections such as “Tuesday, I mean Wednesday” remain untouched because the lexical evidence cannot prove which span to replace. Before changing visible text, Cadence proves that the focused editor still contains exactly the document captured at dictation start plus this transcript, selects only that UTF-16 span through Accessibility, and replaces it through the editor's normal paste command. If the editor is opaque, focus moved, the cursor moved, or any surrounding text changed, Cadence leaves the original dictation untouched.
 
-Snippets use that same append-only boundary. Cadence holds an incomplete or just-completed trigger in the preview, expands it locally, and inserts only the replacement after a following word or pause confirms the trigger. It never types the trigger and edits it afterward. The optional one-second stability buffer keeps the preview immediate while allowing an unpasted partial prefix to change; pauses and shortcut release still flush immediately.
+Snippets use that same append-only boundary. Cadence holds an incomplete or just-completed trigger in the preview, expands it locally, and inserts only the replacement after a following word or pause confirms the trigger. It never types the trigger and edits it afterward, and snippets do **not** require the one-second stability buffer. That optional buffer adds another second in which any unpasted partial prefix may change; pauses and shortcut release still flush immediately.
 
 Each safe text delta is written to the current Mac's pasteboard and delivered with a complete physical Command-down, V-down, V-up, Command-up sequence. Paste operations are serialized so later text cannot replace the pasteboard before the focused editor consumes the earlier insertion. The optional character-by-character setting splits only this final delivery step into complete user-perceived characters; it does not change recognition, snippets, cleanup, or the one-second stability buffer. Its 40–160 WPM control uses the standard five-character word convention. Optional timing variation moves individual intervals by at most 15% around that average.
 
@@ -96,6 +100,7 @@ The application and focused window captured at recording start are checked again
 - Transcript history and personal dictionary entries are stored locally in the app's user defaults. Snippet bodies are stored as an atomic JSON file in Cadence's Application Support directory.
 - Snippets are plain text and are not an encrypted password vault; do not use them for passwords or other secrets.
 - Cadence does not include analytics, advertising, accounts, or cloud sync.
+- Public adoption counters come from GitHub's release and repository APIs; Cadence does not report launches or active-install identities.
 - Update archives and the update feed are verified with Ed25519 signatures before installation.
 - The private update-signing key is not stored in this repository.
 

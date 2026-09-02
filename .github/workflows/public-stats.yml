@@ -1,0 +1,95 @@
+name: Update Public Usage Stats
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Publish Edge Build", "Release Cadence"]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cadence-public-usage-stats
+  cancel-in-progress: true
+
+jobs:
+  update:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Collect and render public counters
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            | jq -s 'add' > "$RUNNER_TEMP/releases.json"
+          gh api "repos/$GITHUB_REPOSITORY" > "$RUNNER_TEMP/repository.json"
+
+          if ! gh api "repos/$GITHUB_REPOSITORY/traffic/views" > "$RUNNER_TEMP/views.json"; then
+            printf '{}\n' > "$RUNNER_TEMP/views.json"
+          fi
+          if ! gh api "repos/$GITHUB_REPOSITORY/traffic/clones" > "$RUNNER_TEMP/clones.json"; then
+            printf '{}\n' > "$RUNNER_TEMP/clones.json"
+          fi
+
+          scripts/render-public-stats.sh \
+            "$RUNNER_TEMP/releases.json" \
+            "$RUNNER_TEMP/repository.json" \
+            "$RUNNER_TEMP/views.json" \
+            "$RUNNER_TEMP/clones.json" \
+            "$(date -u '+%Y-%m-%d %H:%M UTC')" \
+            "$GITHUB_REPOSITORY" \
+            > "$RUNNER_TEMP/public-stats.md"
+
+          grep -Fq '| Unique active Cadence installs | **Not tracked** |' \
+            "$RUNNER_TEMP/public-stats.md"
+          grep -Fq '| DMG installer downloads |' "$RUNNER_TEMP/public-stats.md"
+
+      - name: Publish the pinned stats issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          label="usage-stats"
+          title="Cadence public usage stats"
+          gh label create "$label" \
+            --repo "$GITHUB_REPOSITORY" \
+            --color "84cc16" \
+            --description "Automatically refreshed public adoption counters" \
+            --force
+
+          issue_number="$(
+            gh issue list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state all \
+              --label "$label" \
+              --limit 1 \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          if [[ -z "$issue_number" ]]; then
+            issue_url="$(
+              gh issue create \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "$title" \
+                --label "$label" \
+                --body-file "$RUNNER_TEMP/public-stats.md"
+            )"
+            issue_number="${issue_url##*/}"
+          else
+            gh issue edit "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body-file "$RUNNER_TEMP/public-stats.md"
+            if [[ "$(gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" --json state --jq .state)" == "CLOSED" ]]; then
+              gh issue reopen "$issue_number" --repo "$GITHUB_REPOSITORY"
+            fi
+          fi
+
+          gh issue pin "$issue_number" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
