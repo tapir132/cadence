@@ -30,7 +30,7 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
         typingBufferEnabled: false,
         characterPlaybackEnabled: false,
         characterPlaybackWordsPerMinute: CharacterPlaybackPacing.defaultWordsPerMinute,
-        characterPlaybackTimingVariationEnabled: false
+        characterPlaybackRhythm: .steady
     )
 
     let speechCleanupEnabled: Bool
@@ -38,7 +38,7 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
     let typingBufferEnabled: Bool
     let characterPlaybackEnabled: Bool
     let characterPlaybackWordsPerMinute: Double
-    let characterPlaybackTimingVariationEnabled: Bool
+    let characterPlaybackRhythm: CharacterPlaybackRhythm
 
     init(
         speechCleanupEnabled: Bool,
@@ -46,7 +46,7 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
         typingBufferEnabled: Bool,
         characterPlaybackEnabled: Bool,
         characterPlaybackWordsPerMinute: Double,
-        characterPlaybackTimingVariationEnabled: Bool
+        characterPlaybackRhythm: CharacterPlaybackRhythm
     ) {
         self.speechCleanupEnabled = speechCleanupEnabled
         self.deepEditingEnabled = deepEditingEnabled
@@ -55,11 +55,16 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
         self.characterPlaybackWordsPerMinute = CharacterPlaybackPacing(
             wordsPerMinute: characterPlaybackWordsPerMinute
         ).wordsPerMinute
-        self.characterPlaybackTimingVariationEnabled = characterPlaybackTimingVariationEnabled
+        self.characterPlaybackRhythm = characterPlaybackRhythm
     }
 
     static func load(from defaults: UserDefaults) -> TranscriptDeliveryPreferences {
-        TranscriptDeliveryPreferences(
+        let rhythm = defaults.string(forKey: "characterPlaybackRhythm")
+            .flatMap(CharacterPlaybackRhythm.init(rawValue:))
+            ?? (defaults.bool(forKey: "characterPlaybackTimingVariationEnabled")
+                ? .natural
+                : .steady)
+        return TranscriptDeliveryPreferences(
             speechCleanupEnabled: defaults.bool(forKey: "speechCleanupEnabled"),
             deepEditingEnabled: defaults.bool(forKey: "deepEditingEnabled"),
             typingBufferEnabled: defaults.bool(forKey: "typingBufferEnabled"),
@@ -67,9 +72,7 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
             characterPlaybackWordsPerMinute: defaults.object(
                 forKey: "characterPlaybackWordsPerMinute"
             ) as? Double ?? Self.defaults.characterPlaybackWordsPerMinute,
-            characterPlaybackTimingVariationEnabled: defaults.bool(
-                forKey: "characterPlaybackTimingVariationEnabled"
-            )
+            characterPlaybackRhythm: rhythm
         )
     }
 
@@ -82,8 +85,11 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
             characterPlaybackWordsPerMinute,
             forKey: "characterPlaybackWordsPerMinute"
         )
+        defaults.set(characterPlaybackRhythm.rawValue, forKey: "characterPlaybackRhythm")
+        // Keep the old boolean coherent so downgrading does not unexpectedly
+        // discard a person's preference.
         defaults.set(
-            characterPlaybackTimingVariationEnabled,
+            characterPlaybackRhythm != .steady,
             forKey: "characterPlaybackTimingVariationEnabled"
         )
     }
@@ -98,30 +104,30 @@ struct DictationConfiguration: Equatable, Sendable {
 /// controls. `custom` is derived whenever a user changes any advanced value;
 /// it is not a separate persisted flag that can drift away from the settings.
 enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
-    case responsive
-    case natural
-    case polished
+    case quick
+    case normal
+    case essay
     case custom
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .responsive: "Responsive"
-        case .natural: "Natural"
-        case .polished: "Polished"
+        case .quick: "Quick"
+        case .normal: "Normal"
+        case .essay: "Essay"
         case .custom: "Custom"
         }
     }
 
     var detail: String {
         switch self {
-        case .responsive:
-            "Fastest path from speech to editor, with no optional cleanup or pacing."
-        case .natural:
-            "Stable completed words with human-paced character delivery and safe filler cleanup."
-        case .polished:
-            "More recognition context plus end-of-dictation repair for considered writing."
+        case .quick:
+            "For short replies, commands, and forms. Inserts completed chunks immediately, with no extra cleanup or pacing delay."
+        case .normal:
+            "For messages, notes, and everyday dictation. Cleans clear fillers and waits briefly for stable words, then inserts complete chunks."
+        case .essay:
+            "For long-form writing. Uses more speech context, deeper end editing, and character-paced delivery that finishes after you release the shortcut."
         case .custom:
             "Your Advanced settings do not match a built-in profile."
         }
@@ -129,7 +135,7 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
 
     var configuration: DictationConfiguration? {
         switch self {
-        case .responsive:
+        case .quick:
             DictationConfiguration(
                 recognitionProfile: .fast,
                 delivery: TranscriptDeliveryPreferences(
@@ -138,22 +144,22 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
                     typingBufferEnabled: false,
                     characterPlaybackEnabled: false,
                     characterPlaybackWordsPerMinute: 120,
-                    characterPlaybackTimingVariationEnabled: false
+                    characterPlaybackRhythm: .steady
                 )
             )
-        case .natural:
+        case .normal:
             DictationConfiguration(
                 recognitionProfile: .fast,
                 delivery: TranscriptDeliveryPreferences(
                     speechCleanupEnabled: true,
                     deepEditingEnabled: false,
                     typingBufferEnabled: true,
-                    characterPlaybackEnabled: true,
+                    characterPlaybackEnabled: false,
                     characterPlaybackWordsPerMinute: 120,
-                    characterPlaybackTimingVariationEnabled: true
+                    characterPlaybackRhythm: .steady
                 )
             )
-        case .polished:
+        case .essay:
             DictationConfiguration(
                 recognitionProfile: .accurate,
                 delivery: TranscriptDeliveryPreferences(
@@ -162,7 +168,7 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
                     typingBufferEnabled: true,
                     characterPlaybackEnabled: true,
                     characterPlaybackWordsPerMinute: 100,
-                    characterPlaybackTimingVariationEnabled: true
+                    characterPlaybackRhythm: .natural
                 )
             )
         case .custom:
@@ -175,7 +181,19 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
     }
 
     static func matching(_ configuration: DictationConfiguration) -> DictationProfile {
-        presets.first { $0.configuration == configuration } ?? .custom
+        presets.first { profile in
+            guard let preset = profile.configuration else { return false }
+            let expected = preset.delivery
+            let actual = configuration.delivery
+            // Pace and rhythm are Essay customizations. They are irrelevant to
+            // the chunked Quick and Normal profiles and should never make a
+            // recognizable profile appear as Custom.
+            return preset.recognitionProfile == configuration.recognitionProfile
+                && expected.speechCleanupEnabled == actual.speechCleanupEnabled
+                && expected.deepEditingEnabled == actual.deepEditingEnabled
+                && expected.typingBufferEnabled == actual.typingBufferEnabled
+                && expected.characterPlaybackEnabled == actual.characterPlaybackEnabled
+        } ?? .custom
     }
 }
 

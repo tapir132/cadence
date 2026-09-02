@@ -26,28 +26,44 @@ struct InsertionEvidenceClassifier {
         }
         if evidence.focusedElementChanged { return .unavailable }
 
-        if let originalRange = evidence.originalSelection,
-           let currentRange = evidence.currentSelection {
+        // When an editor exposes both its text and selection, require the
+        // actual document mutation—not cursor distance alone. Cursor movement
+        // can otherwise make a dropped chunk or a newline-to-spaces conversion
+        // look successful.
+        if let original = evidence.originalValue,
+           let current = evidence.currentValue,
+           let originalRange = evidence.originalSelection,
+           originalRange.location >= 0,
+           originalRange.length >= 0,
+           originalRange.location + originalRange.length <= original.utf16.count {
+            let expected = (original as NSString).replacingCharacters(
+                in: NSRange(location: originalRange.location, length: originalRange.length),
+                with: insertedText
+            )
+            if current == expected {
+                guard let currentRange = evidence.currentSelection else { return .confirmed }
+                let expectedEnd = originalRange.location + insertedText.utf16.count
+                return currentRange.location == expectedEnd && currentRange.length == 0
+                    ? .confirmed
+                    : .failed
+            }
+            if current != original { return .failed }
+        } else if let originalRange = evidence.originalSelection,
+                  let currentRange = evidence.currentSelection {
             let expectedAdvance = insertedText.utf16.count
-            if currentRange.location >= originalRange.location + expectedAdvance {
+            if currentRange.location >= originalRange.location + expectedAdvance,
+               currentRange.length == 0 {
                 return .confirmed
             }
         }
 
         if let original = evidence.originalValue, let current = evidence.currentValue {
-            if current != original, normalized(current).contains(normalized(insertedText)) {
-                return .confirmed
-            }
             if current == original, rangesEqual(evidence.originalSelection, evidence.currentSelection) {
                 return .failed
             }
         }
 
         return .unavailable
-    }
-
-    private static func normalized(_ text: String) -> String {
-        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private static func rangesEqual(_ first: CFRange?, _ second: CFRange?) -> Bool {

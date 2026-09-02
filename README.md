@@ -10,12 +10,13 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Append-only word emission with context-aware sentence boundaries after a pause
 - Continuous pause rollover, including punctuation and speech in later sentences
 - Fast (320 ms) and Accurate (1.12 s) local recognition profiles
-- Responsive, Natural, and Polished setup profiles with complete manual controls under Advanced
+- Quick, Normal, and Essay profiles labeled by use case, with complete manual controls under Advanced
 - Optional context-aware filler cleanup for vocal pauses and detached discourse asides
 - Optional logic-driven end-of-dictation repair for repeated starts, editing terms, and false sentence boundaries
 - Spoken punctuation, paragraph, and common correspondence formatting commands
 - Reliable standard clipboard pastes instead of lossy synthetic Unicode events
-- Optional character-by-character delivery with adjustable WPM and bounded timing variation
+- Essay-only character delivery with adjustable WPM and Steady, Natural, or Expressive typing rhythms
+- Optional global music pause for Apple Music and Spotify while Cadence listens
 - Focus-bound delivery that refuses to paste after the user changes windows
 - Personal dictionary spelling, capitalization, and diacritics for names and specialized vocabulary
 - Local snippets that expand a spoken trigger before any trigger words reach the editor
@@ -34,6 +35,8 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - macOS 14 or later
 - Microphone access
 - Accessibility access for pasting into other applications
+
+The optional Pause music setting asks for macOS Automation access only when it first needs to control a running Music or Spotify app.
 
 The current release build is optimized for Apple Silicon. On first launch Cadence downloads and prepares the English speech and voice-activity models (roughly 600 MB total); later transcription runs locally without sending microphone audio to a speech service. Selecting Accurate downloads one additional local encoder the first time it is used. Cadence keeps both encoders warm after that first preparation, so later Fast/Accurate switches do not reload a 565 MB model.
 
@@ -72,7 +75,7 @@ Cadence re-checks these every few seconds while Settings is open, so changes mad
 
 Place the cursor in an editor, hold the configured shortcut while you speak, and release it to finish. The default is **Control–Option–Space**; a function key or a modifier-only chord such as ⌃⌥ works too.
 
-Say **“period”**, **“full stop”**, **“comma”**, **“question mark”**, **“new line”**, or **“new paragraph”** to format text instead of typing the command words. Cadence also writes an honorific such as “doctor Solarz” as “Dr. Solarz.” These follow the conventions used by macOS Dictation.
+Say **“period”**, **“full stop”**, **“comma”**, **“question mark”**, **“new line”**, or **“new paragraph”** to format text instead of typing the command words. Cadence keeps layout words literal when sentence grammar makes their meaning clear—for example, “a new line” and “the words new paragraph.” Cadence also writes an honorific such as “doctor Solarz” as “Dr. Solarz.” These follow the conventions used by macOS Dictation.
 
 The floating bar can stop or cancel dictation without activating the main Cadence window. When idle, it collapses into a slim edge-aware handle and expands when hovered. Drag the expanded logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement. Double-click the logo to open Cadence; a single click never opens the app.
 
@@ -88,9 +91,9 @@ The separate Deeper editing option runs only after the shortcut is released. It 
 
 Snippets use that same append-only boundary. Cadence holds an incomplete or just-completed trigger in the preview, expands it locally, and inserts only the replacement after a following word or pause confirms the trigger. It never types the trigger and edits it afterward, and snippets do **not** require the one-second stability buffer. That optional buffer adds another second in which any unpasted partial prefix may change; pauses and shortcut release still flush immediately.
 
-Each safe text delta is written to the current Mac's pasteboard and delivered with a complete physical Command-down, V-down, V-up, Command-up sequence. Paste operations are serialized so later text cannot replace the pasteboard before the focused editor consumes the earlier insertion. The optional character-by-character setting splits only this final delivery step into complete user-perceived characters; it does not change recognition, snippets, cleanup, or the one-second stability buffer. Its 40–160 WPM control uses the standard five-character word convention. Optional timing variation moves individual intervals by at most 15% around that average.
+Each safe text delta is written to the current Mac's pasteboard and delivered with a complete physical Command-down, V-down, V-up, Command-up sequence. Paste operations are serialized, and every accessible cursor advance is acknowledged before later text can replace the pasteboard. Essay splits only this final delivery step into complete user-perceived characters; Quick and Normal paste complete chunks. Essay's 40–160 WPM control uses the standard five-character word convention. Steady, Natural, and Expressive rhythms add progressively wider local timing variation plus word- and punctuation-aware pauses; they never add mistakes.
 
-When an editor exposes its insertion point, every character must advance the cursor before Cadence proceeds. A swallowed paste is retried twice; repeated failure stops the queue and surfaces the complete transcript instead of silently dropping a letter. Editors without accessible cursor progress use a conservative per-character timeout and may run below the selected WPM.
+When an editor exposes its insertion point, every chunk or character must advance the cursor before Cadence proceeds. A swallowed paste is retried twice; repeated failure stops the queue and surfaces the complete transcript instead of silently dropping text. Final verification compares the exact accessible document mutation, so substituting spaces for a line break no longer counts as success. Editors without accessible cursor progress use a conservative timeout and may run below the selected WPM.
 
 The application and focused window captured at recording start are checked again immediately before the V key-down. If the target changed, Cadence leaves the transcript on the clipboard and shows a recovery card instead of risking a paste into the wrong window. See [Research and architecture](docs/RESEARCH.md) for the evidence and tradeoffs behind this design.
 

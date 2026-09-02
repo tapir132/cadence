@@ -57,6 +57,45 @@ import Testing
     #expect(totalFrames > 90_000)
 }
 
+/// Manual end-to-end smoke check for the shipping microphone path. Unlike the
+/// deterministic model tests below, this records the current Mac's real input
+/// while `say` speaks through its selected output device.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_LIVE_MIC_TEST"] == "1"))
+func liveMicrophoneKeepsLiteralNewLineWords() async throws {
+    #expect(AudioCaptureEngine.microphoneAuthorized, "Microphone access is required")
+
+    let transcriber = LiveSpeechTranscriber()
+    try await transcriber.prepare(profile: .accurate) { _ in }
+    let engine = AudioCaptureEngine()
+    let audio = try engine.start { _ in }
+    let transcription = Task {
+        try await transcriber.transcribe(
+            audio,
+            cleanupEnabled: true
+        ) { _ in }
+    }
+
+    try await Task.sleep(for: .milliseconds(700))
+    let spoken = "It seems like when it goes into a new line in Terminal, it inserts spaces."
+    try await Task.detached {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        process.arguments = ["-r", "145", spoken]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw CocoaError(.executableRuntimeMismatch)
+        }
+    }.value
+    try await Task.sleep(for: .seconds(2))
+    engine.finish()
+
+    let result = try await transcription.value
+    print("Live microphone transcript: \(result.debugDescription)")
+    #expect(result.localizedCaseInsensitiveContains("new line"))
+    #expect(!result.contains("\n"))
+}
+
 /// Opt-in because it downloads the production streaming ASR and VAD models.
 /// This drives the real Cadence pipeline in microphone-sized chunks. Sentence
 /// one must be emitted word by word, including its tail and period, before any

@@ -14,13 +14,7 @@ enum SpokenPunctuationFormatter {
                 options: .regularExpression
             )
         }
-        for (pattern, replacement) in layoutReplacements {
-            result = result.replacingOccurrences(
-                of: pattern,
-                with: replacement,
-                options: .regularExpression
-            )
-        }
+        result = replacingLayoutCommands(in: result)
 
         // A punctuation command may follow punctuation inserted by the model.
         // Keep the command's (last) mark and remove only adjacent duplicates.
@@ -76,7 +70,15 @@ enum SpokenPunctuationFormatter {
         }) == true
         guard isIncompleteCommand else { return nil }
 
-        var prefixEnd = words[words.count - 2].startIndex
+        let commandStart = words[words.count - 2].startIndex
+        if command == "new", isLiteralLayoutPhrase(
+            in: transcript,
+            phraseRange: commandStart..<transcript.endIndex
+        ) {
+            return nil
+        }
+
+        var prefixEnd = commandStart
         while prefixEnd > transcript.startIndex {
             let previous = transcript.index(before: prefixEnd)
             guard transcript[previous].isWhitespace else { break }
@@ -100,8 +102,81 @@ enum SpokenPunctuationFormatter {
     /// A model often adds a period to “new paragraph” as if it were prose.
     /// Consume punctuation after the command, but preserve punctuation before
     /// it because that belongs to the preceding sentence.
-    private static let layoutReplacements: [(String, String)] = [
-        (#"(?i)(?:^|[ \t]+)new[ \t-]+paragraph\b[.,!?;:]?[ \t]*"#, "\n\n"),
-        (#"(?i)(?:^|[ \t]+)new[ \t-]+line\b[.,!?;:]?[ \t]*"#, "\n")
+    private static let layoutReplacements: [(pattern: String, replacement: String)] = [
+        (#"(?i)(?:^|[ \t]+)(new[ \t-]+paragraph)\b[.,!?;:]?[ \t]*"#, "\n\n"),
+        (#"(?i)(?:^|[ \t]+)(new[ \t-]+line)\b[.,!?;:]?[ \t]*"#, "\n")
+    ]
+
+    private static func replacingLayoutCommands(in text: String) -> String {
+        var result = text
+        for command in layoutReplacements {
+            guard let expression = try? NSRegularExpression(pattern: command.pattern) else {
+                continue
+            }
+            let searchRange = NSRange(result.startIndex..<result.endIndex, in: result)
+            let matches = expression.matches(in: result, range: searchRange)
+            for match in matches.reversed() {
+                guard let matchRange = Range(match.range, in: result),
+                      let phraseRange = Range(match.range(at: 1), in: result),
+                      !isLiteralLayoutPhrase(in: result, phraseRange: phraseRange)
+                else { continue }
+                result.replaceSubrange(matchRange, with: command.replacement)
+            }
+        }
+        return result
+    }
+
+    /// Spoken formatting has no separate command channel, so grammar must
+    /// disambiguate a requested break from literal language. Determiners and
+    /// metalinguistic words make “new line” or “new paragraph” part of the
+    /// sentence, as in “goes into a new line” or “the words new paragraph.”
+    private static func isLiteralLayoutPhrase(
+        in text: String,
+        phraseRange: Range<String.Index>
+    ) -> Bool {
+        let previous = word(before: phraseRange.lowerBound, in: text)
+        let following = word(after: phraseRange.upperBound, in: text)
+        return previous.map(literalLayoutPredecessors.contains) == true
+            || following.map(literalLayoutFollowers.contains) == true
+    }
+
+    private static func word(before index: String.Index, in text: String) -> String? {
+        var end = index
+        while end > text.startIndex {
+            let previous = text.index(before: end)
+            guard !text[previous].isLetter else { break }
+            end = previous
+        }
+        var start = end
+        while start > text.startIndex {
+            let previous = text.index(before: start)
+            guard text[previous].isLetter else { break }
+            start = previous
+        }
+        guard start < end else { return nil }
+        return text[start..<end].lowercased()
+    }
+
+    private static func word(after index: String.Index, in text: String) -> String? {
+        var start = index
+        while start < text.endIndex, !text[start].isLetter {
+            start = text.index(after: start)
+        }
+        var end = start
+        while end < text.endIndex, text[end].isLetter {
+            end = text.index(after: end)
+        }
+        guard start < end else { return nil }
+        return text[start..<end].lowercased()
+    }
+
+    private static let literalLayoutPredecessors: Set<String> = [
+        "a", "an", "another", "called", "each", "every", "interpret",
+        "interpreting", "interprets", "literal", "phrase", "say", "saying",
+        "says", "spell", "spelled", "term", "the", "type", "typed", "typing",
+        "word", "words", "write", "writes", "writing", "wrote"
+    ]
+    private static let literalLayoutFollowers: Set<String> = [
+        "are", "as", "is", "means", "meaning"
     ]
 }

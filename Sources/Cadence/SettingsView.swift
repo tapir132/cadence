@@ -60,6 +60,12 @@ struct SettingsView: View {
                     line
                     if recognitionSettingsPage == .profiles {
                         dictationProfileRow
+                        if model.dictationProfile == .essay {
+                            line
+                            characterPlaybackSpeedRow
+                            line
+                            characterPlaybackRhythmRow
+                        }
                     } else {
                         recognitionProfileRow
                         line
@@ -70,13 +76,19 @@ struct SettingsView: View {
                         typingBufferRow
                         line
                         characterPlaybackRow
-                        line
-                        characterPlaybackSpeedRow
-                        line
-                        characterPlaybackVariationRow
+                        if model.characterPlaybackEnabled {
+                            line
+                            characterPlaybackSpeedRow
+                            line
+                            characterPlaybackRhythmRow
+                        }
                     }
                 }
                 .settingsSurface()
+
+                sectionTitle("Listening").padding(.top, 34)
+                pauseMusicRow
+                    .settingsSurface()
 
                 sectionTitle("Global shortcut").padding(.top, 34)
                 HStack {
@@ -337,41 +349,43 @@ struct SettingsView: View {
     }
 
     private var dictationProfileRow: some View {
-        HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 18) {
                 HStack(spacing: 7) {
                     Text("Dictation profile").font(.system(size: 13, weight: .semibold))
-                    if model.dictationProfile == .natural {
+                    if model.dictationProfile == .normal {
                         Text("RECOMMENDED")
                             .font(.system(size: 8, weight: .bold))
                             .tracking(0.7)
                             .foregroundStyle(CadenceTheme.muted)
                     }
                 }
-                Text(model.dictationProfile.detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(CadenceTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                if model.dictationProfile == .custom {
-                    Button("Review Advanced settings") {
-                        recognitionSettingsPage = .advanced
+                Spacer(minLength: 18)
+                Picker("Dictation profile", selection: dictationProfileBinding) {
+                    ForEach(DictationProfile.presets) { profile in
+                        Text(profile.title).tag(profile)
                     }
-                    .buttonStyle(.link)
-                    .font(.system(size: 11, weight: .semibold))
+                    if model.dictationProfile == .custom {
+                        Text("Custom").tag(DictationProfile.custom)
+                    }
                 }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: model.dictationProfile == .custom ? 360 : 300)
+                .disabled(model.isListening)
             }
-            Spacer(minLength: 18)
-            Picker("Dictation profile", selection: dictationProfileBinding) {
-                ForEach(DictationProfile.presets) { profile in
-                    Text(profile == .natural ? "Natural (Recommended)" : profile.title)
-                        .tag(profile)
+
+            Text(model.dictationProfile.detail)
+                .font(.system(size: 11))
+                .foregroundStyle(CadenceTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if model.dictationProfile == .custom {
+                Button("Review Advanced settings") {
+                    recognitionSettingsPage = .advanced
                 }
-                Divider()
-                Text("Custom").tag(DictationProfile.custom)
+                .buttonStyle(.link)
+                .font(.system(size: 11, weight: .semibold))
             }
-            .labelsHidden()
-            .frame(width: 180)
-            .disabled(model.isListening)
         }
         .padding(16)
     }
@@ -387,6 +401,26 @@ struct SettingsView: View {
                 }
             }
         )
+    }
+
+    private var pauseMusicRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pause music while dictating")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Pauses Music and Spotify when listening starts, then resumes only playback Cadence paused. macOS may ask once for Automation access.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Toggle("Pause music while dictating", isOn: $model.pauseMusicDuringDictation)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel("Pause music while dictating")
+        }
+        .disabled(model.isListening)
+        .padding(16)
     }
 
     private var speechCleanupRow: some View {
@@ -462,22 +496,22 @@ struct SettingsView: View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
-                    Text("Character-by-character typing").font(.system(size: 13, weight: .semibold))
+                    Text("Essay-style character typing").font(.system(size: 13, weight: .semibold))
                     Text("BETA")
                         .font(.system(size: 8, weight: .bold))
                         .tracking(0.8)
                         .foregroundStyle(CadenceTheme.muted)
                 }
-                Text("Delivers committed text one complete character at a time. This changes typing appearance only; recognition and the stability buffer stay independent.")
+                Text("Delivers committed text one complete character at a time. Essay enables this; Quick and Normal paste complete chunks instead.")
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 18)
-            Toggle("Character-by-character typing", isOn: $model.characterPlaybackEnabled)
+            Toggle("Essay-style character typing", isOn: $model.characterPlaybackEnabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .accessibilityLabel("Character-by-character typing")
+                .accessibilityLabel("Essay-style character typing")
         }
         .disabled(model.isListening)
         .padding(16)
@@ -512,23 +546,24 @@ struct SettingsView: View {
         .padding(16)
     }
 
-    private var characterPlaybackVariationRow: some View {
+    private var characterPlaybackRhythmRow: some View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Timing variation").font(.system(size: 13, weight: .semibold))
-                Text("Adds small random timing differences while preserving the selected average speed. It never adds mistakes or correction behavior.")
+                Text("Typing rhythm").font(.system(size: 13, weight: .semibold))
+                Text(model.characterPlaybackRhythm.detail)
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 18)
-            Toggle(
-                "Timing variation",
-                isOn: $model.characterPlaybackTimingVariationEnabled
-            )
+            Picker("Typing rhythm", selection: $model.characterPlaybackRhythm) {
+                ForEach(CharacterPlaybackRhythm.allCases) { rhythm in
+                    Text(rhythm.title).tag(rhythm)
+                }
+            }
             .labelsHidden()
-            .toggleStyle(.switch)
-            .accessibilityLabel("Timing variation")
+            .frame(width: 150)
+            .accessibilityLabel("Typing rhythm")
         }
         .disabled(model.isListening || !model.characterPlaybackEnabled)
         .padding(16)

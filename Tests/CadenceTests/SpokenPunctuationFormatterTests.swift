@@ -100,3 +100,34 @@ import Testing
     #expect(inserted == "Thank you.\n\nLiam.")
     #expect(emitter.completedText == inserted)
 }
+
+@Test func layoutWordsStayLiteralWhenTheyArePartOfTheSentence() throws {
+    let terminalSentence = "It seems like when it goes into a new line in Terminal it inserts spaces."
+    #expect(SpokenPunctuationFormatter.format(terminalSentence) == terminalSentence)
+
+    let explanation = "Cadence is interpreting new line as a command."
+    #expect(SpokenPunctuationFormatter.format(explanation) == explanation)
+
+    let explicitWords = "Type the words new paragraph in the document."
+    #expect(SpokenPunctuationFormatter.format(explicitWords) == explicitWords)
+
+    // Unambiguous formatting commands retain the familiar macOS Dictation behavior.
+    #expect(
+        SpokenPunctuationFormatter.format("First thought period new line Second thought")
+            == "First thought.\nSecond thought"
+    )
+}
+
+@Test func literalPartialLayoutPhraseCanStreamWithoutBeingHeldAsACommand() throws {
+    var emitter = LiveTranscriptEmitter()
+    var inserted = ""
+
+    inserted += try emitter.consume("It goes into a new li")?.insertion ?? ""
+    inserted += try emitter.consume("It goes into a new line in Terminal")?.insertion ?? ""
+    inserted += try emitter.finalize(
+        "It goes into a new line in Terminal",
+        continuesAfterPause: false
+    )?.insertion ?? ""
+
+    #expect(inserted == "It goes into a new line in Terminal.")
+}

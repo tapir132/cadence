@@ -41,17 +41,25 @@ import Testing
     )
 }
 
-@Test func characterPlaybackPacingUsesWPMAndBoundedVariation() {
+@Test func characterPlaybackPacingUsesWPMAndLanguageAwareRhythms() {
     let steady = CharacterPlaybackPacing(wordsPerMinute: 120)
     #expect(steady.intervalMilliseconds() == 100)
 
-    let varied = CharacterPlaybackPacing(
+    let natural = CharacterPlaybackPacing(
         wordsPerMinute: 120,
-        timingVariationEnabled: true
+        rhythm: .natural
     )
-    #expect(varied.intervalMilliseconds(randomUnit: 0) == 85)
-    #expect(varied.intervalMilliseconds(randomUnit: 0.5) == 100)
-    #expect(abs(varied.intervalMilliseconds(randomUnit: 1) - 115) < 0.000_001)
+    #expect(natural.intervalMilliseconds(after: "a", randomUnit: 0) < 100)
+    #expect(natural.intervalMilliseconds(after: "a", randomUnit: 0.5) == 95)
+    #expect(natural.intervalMilliseconds(after: " ", randomUnit: 0.5) == 120)
+    #expect(natural.intervalMilliseconds(after: ".", randomUnit: 0.5) == 180)
+    #expect(natural.intervalMilliseconds(after: "\n", randomUnit: 0.5) == 240)
+
+    let expressive = CharacterPlaybackPacing(wordsPerMinute: 120, rhythm: .expressive)
+    #expect(
+        expressive.intervalMilliseconds(after: ".", randomUnit: 1)
+            > natural.intervalMilliseconds(after: ".", randomUnit: 1)
+    )
 
     #expect(CharacterPlaybackPacing(wordsPerMinute: 10).wordsPerMinute == 40)
     #expect(CharacterPlaybackPacing(wordsPerMinute: 500).wordsPerMinute == 160)

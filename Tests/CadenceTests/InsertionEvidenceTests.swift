@@ -28,6 +28,25 @@ import Testing
     #expect(InsertionEvidenceClassifier.classify(evidence, insertedText: " hello") == .failed)
 }
 
+@Test func insertionEvidenceRejectsWhitespaceSubstitutionDespiteCursorAdvance() {
+    let evidence = InsertionEvidence(
+        postingFailed: false,
+        targetApplicationChanged: false,
+        focusedElementChanged: false,
+        originalValue: "Prompt: ",
+        currentValue: "Prompt: first  second",
+        originalSelection: CFRange(location: 8, length: 0),
+        currentSelection: CFRange(location: 21, length: 0)
+    )
+
+    #expect(
+        InsertionEvidenceClassifier.classify(
+            evidence,
+            insertedText: "first\nsecond"
+        ) == .failed
+    )
+}
+
 @Test func insertionEvidenceTreatsOpaqueEditorsAsUnavailable() {
     let evidence = InsertionEvidence(
         postingFailed: false,

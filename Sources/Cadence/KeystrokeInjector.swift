@@ -18,36 +18,107 @@ enum CadenceSyntheticEvent {
     }
 }
 
+enum CharacterPlaybackRhythm: String, CaseIterable, Codable, Identifiable, Sendable {
+    case steady
+    case natural
+    case expressive
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .steady: "Steady"
+        case .natural: "Natural"
+        case .expressive: "Expressive"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .steady:
+            "Even intervals with no random variation."
+        case .natural:
+            "Mild variation with brief pauses between words and after punctuation."
+        case .expressive:
+            "Wider variation with more noticeable phrase and sentence pauses."
+        }
+    }
+
+    fileprivate var jitter: Double {
+        switch self {
+        case .steady: 0
+        case .natural: 0.12
+        case .expressive: 0.25
+        }
+    }
+
+    fileprivate func boundaryMultiplier(after character: Character?) -> Double {
+        guard let character else { return 1 }
+        switch self {
+        case .steady:
+            return 1
+        case .natural:
+            if character == "\n" { return 2.4 }
+            if ".!?".contains(character) { return 1.8 }
+            if ",;:".contains(character) { return 1.35 }
+            if character.isWhitespace { return 1.2 }
+            // Four regular characters and one word boundary still average to
+            // the selected five-character WPM convention.
+            return 0.95
+        case .expressive:
+            if character == "\n" { return 3 }
+            if ".!?".contains(character) { return 2.3 }
+            if ",;:".contains(character) { return 1.6 }
+            if character.isWhitespace { return 1.4 }
+            return 0.9
+        }
+    }
+}
+
 struct CharacterPlaybackPacing: Equatable, Sendable {
     static let wordsPerMinuteRange = 40.0...160.0
     static let defaultWordsPerMinute = 120.0
 
     let wordsPerMinute: Double
-    let timingVariationEnabled: Bool
+    let rhythm: CharacterPlaybackRhythm
 
     init(
         wordsPerMinute: Double = defaultWordsPerMinute,
-        timingVariationEnabled: Bool = false
+        rhythm: CharacterPlaybackRhythm = .steady
     ) {
         self.wordsPerMinute = min(
             max(wordsPerMinute, Self.wordsPerMinuteRange.lowerBound),
             Self.wordsPerMinuteRange.upperBound
         )
-        self.timingVariationEnabled = timingVariationEnabled
+        self.rhythm = rhythm
     }
 
     /// Typing-speed WPM conventionally treats five characters, including
-    /// spaces, as one word. Variation is symmetric, so the selected WPM remains
-    /// the long-run average instead of becoming a hidden speed boost.
-    func intervalMilliseconds(randomUnit: Double = 0.5) -> Double {
+    /// spaces, as one word. Non-steady rhythms keep ordinary word timing near
+    /// that average while adding language-aware rests at punctuation.
+    func intervalMilliseconds(
+        after character: Character? = nil,
+        randomUnit: Double = 0.5
+    ) -> Double {
         let base = 60_000 / (wordsPerMinute * 5)
-        guard timingVariationEnabled else { return base }
+        guard rhythm != .steady else { return base }
         let unit = min(max(randomUnit, 0), 1)
-        return base * (0.85 + (unit * 0.30))
+        let centered = (unit - 0.5) * 2
+        // Pull most intervals toward the chosen pace instead of producing the
+        // mechanical-looking uniform jitter used by the old on/off setting.
+        let shaped = centered.sign == .minus
+            ? -pow(abs(centered), 1.6)
+            : pow(centered, 1.6)
+        let randomized = 1 + (shaped * rhythm.jitter)
+        return base * rhythm.boundaryMultiplier(after: character) * randomized
     }
 
-    func interval(randomUnit: Double = 0.5) -> Duration {
-        .milliseconds(Int64(intervalMilliseconds(randomUnit: randomUnit).rounded()))
+    func interval(after character: Character? = nil, randomUnit: Double = 0.5) -> Duration {
+        .milliseconds(
+            Int64(
+                intervalMilliseconds(after: character, randomUnit: randomUnit).rounded()
+            )
+        )
     }
 }
 
@@ -85,7 +156,7 @@ final class KeystrokeInjector {
     private var deliveryMode: TextDeliveryMode = .chunked
     private var drainGeneration = 0
 
-    private enum CharacterPasteAcknowledgment {
+    private enum PasteAcknowledgment {
         case confirmed
         case unchanged
         case unavailable
@@ -184,13 +255,7 @@ final class KeystrokeInjector {
             let delivered: Bool
             switch deliveryMode {
             case .chunked:
-                delivered = paste(text, expectedTarget: expectedTarget)
-                if delivered {
-                    // Command-V is delivered asynchronously. Keep the queue
-                    // serialized so a later paste cannot replace the pasteboard
-                    // before the target has consumed this one.
-                    try? await Task.sleep(for: .milliseconds(120))
-                }
+                delivered = await deliverText(text, minimumInterval: .milliseconds(120))
             case let .characterByCharacter(pacing):
                 delivered = await deliverCharacter(text, pacing: pacing)
             }
@@ -225,18 +290,27 @@ final class KeystrokeInjector {
         pacing: CharacterPlaybackPacing
     ) async -> Bool {
         let interval = pacing.interval(
-            randomUnit: pacing.timingVariationEnabled ? .random(in: 0...1) : 0.5
+            after: text.first,
+            randomUnit: pacing.rhythm == .steady ? 0.5 : .random(in: 0...1)
         )
+        return await deliverText(text, minimumInterval: interval)
+    }
+
+    /// Every queued paste, including normal chunk delivery, waits for the real
+    /// editor cursor when Accessibility exposes it. This prevents a later
+    /// pasteboard write from overtaking a slow target and retries a swallowed
+    /// Command-V before silently losing text.
+    private func deliverText(_ text: String, minimumInterval: Duration) async -> Bool {
         for attempt in 0..<3 {
             let originalSelection = expectedTarget.flatMap(TextInsertionVerifier.currentSelection)
             let startedAt = ContinuousClock.now
             guard paste(text, expectedTarget: expectedTarget) else { return false }
 
-            switch await waitForCharacterPaste(
+            switch await waitForPaste(
                 text,
                 originalSelection: originalSelection,
                 startedAt: startedAt,
-                interval: interval
+                minimumInterval: minimumInterval
             ) {
             case .confirmed, .unavailable:
                 return true
@@ -250,16 +324,16 @@ final class KeystrokeInjector {
     }
 
     /// Accessible editors acknowledge each paste by advancing their insertion
-    /// point. A missing V event therefore retries the same grapheme instead of
-    /// silently dropping it. Opaque editors retain the conservative timeout.
-    private func waitForCharacterPaste(
+    /// point. A missing V event therefore retries the same unit instead of
+    /// silently dropping text. Opaque editors retain the conservative timeout.
+    private func waitForPaste(
         _ text: String,
         originalSelection: CFRange?,
         startedAt: ContinuousClock.Instant,
-        interval: Duration
-    ) async -> CharacterPasteAcknowledgment {
+        minimumInterval: Duration
+    ) async -> PasteAcknowledgment {
         let clock = ContinuousClock()
-        let earliestNextPaste = startedAt.advanced(by: interval)
+        let earliestNextPaste = startedAt.advanced(by: minimumInterval)
         let acknowledgmentDeadline = startedAt.advanced(by: .milliseconds(400))
 
         if let originalSelection, let expectedTarget {
@@ -290,7 +364,7 @@ final class KeystrokeInjector {
             }
             return lastObservedSelection == nil ? .unavailable : .unchanged
         } else {
-            let opaqueEditorDelay = max(interval, .milliseconds(120))
+            let opaqueEditorDelay = max(minimumInterval, .milliseconds(120))
             await sleep(until: startedAt.advanced(by: opaqueEditorDelay), clock: clock)
             return .unavailable
         }

@@ -68,13 +68,19 @@ final class AppModel: ObservableObject {
     @Published var characterPlaybackWordsPerMinute = CharacterPlaybackPacing.defaultWordsPerMinute {
         didSet { saveSettings() }
     }
-    @Published var characterPlaybackTimingVariationEnabled = false { didSet { saveSettings() } }
+    @Published var characterPlaybackRhythm: CharacterPlaybackRhythm = .steady {
+        didSet { saveSettings() }
+    }
+    /// This stays independent from Quick, Normal, and Essay so changing a
+    /// dictation profile never changes the listening environment.
+    @Published var pauseMusicDuringDictation = false { didSet { saveSettings() } }
     @Published private(set) var freeBarX = 0.5
     @Published private(set) var freeBarY = 0.0
 
     private let speechEngine = AudioCaptureEngine()
     private let transcriber = LiveSpeechTranscriber()
     private let injector = KeystrokeInjector()
+    private let mediaPlaybackController = MediaPlaybackController()
     private let snippetStore = TextSnippetStore()
     private var startedAt: Date?
     private var targetAppName = "Another app"
@@ -119,8 +125,10 @@ final class AppModel: ObservableObject {
         typingBufferEnabled = deliveryPreferences.typingBufferEnabled
         characterPlaybackEnabled = deliveryPreferences.characterPlaybackEnabled
         characterPlaybackWordsPerMinute = deliveryPreferences.characterPlaybackWordsPerMinute
-        characterPlaybackTimingVariationEnabled = deliveryPreferences
-            .characterPlaybackTimingVariationEnabled
+        characterPlaybackRhythm = deliveryPreferences.characterPlaybackRhythm
+        pauseMusicDuringDictation = UserDefaults.standard.bool(
+            forKey: "pauseMusicDuringDictation"
+        )
         freeBarX = UserDefaults.standard.object(forKey: "freeBarX") as? Double ?? 0.5
         freeBarY = UserDefaults.standard.object(forKey: "freeBarY") as? Double ?? 0
         if UserDefaults.standard.integer(forKey: "floatingBarDesignVersion") < 2 {
@@ -216,6 +224,7 @@ final class AppModel: ObservableObject {
         startedAt = Date()
         state = .listening
 
+        mediaPlaybackController.begin(enabled: pauseMusicDuringDictation)
         do {
             let audio = try speechEngine.start { [weak self] level in
                 Task { @MainActor in self?.audioLevel = level }
@@ -248,6 +257,7 @@ final class AppModel: ObservableObject {
             }
         } catch {
             speechEngine.cancel()
+            mediaPlaybackController.end()
             state = .error(error.localizedDescription)
             startedAt = nil
             insertionSnapshot = nil
@@ -259,6 +269,7 @@ final class AppModel: ObservableObject {
         state = .finishing
         audioLevel = 0
         speechEngine.finish()
+        mediaPlaybackController.end()
     }
 
     func cancelDictation() {
@@ -268,6 +279,7 @@ final class AppModel: ObservableObject {
         insertionVerificationTask = nil
         speechEngine.cancel()
         injector.cancelPending()
+        mediaPlaybackController.end()
         state = .idle
         startedAt = nil
         liveText = ""
@@ -419,8 +431,7 @@ final class AppModel: ObservableObject {
         typingBufferEnabled = delivery.typingBufferEnabled
         characterPlaybackEnabled = delivery.characterPlaybackEnabled
         characterPlaybackWordsPerMinute = delivery.characterPlaybackWordsPerMinute
-        characterPlaybackTimingVariationEnabled = delivery
-            .characterPlaybackTimingVariationEnabled
+        characterPlaybackRhythm = delivery.characterPlaybackRhythm
         isApplyingDictationProfile = false
         saveSettings()
 
@@ -435,13 +446,17 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(barPlacement.rawValue, forKey: "barPlacement")
         UserDefaults.standard.set(barScale, forKey: "barScale")
         UserDefaults.standard.set(recognitionProfile.rawValue, forKey: "recognitionProfile")
+        UserDefaults.standard.set(
+            pauseMusicDuringDictation,
+            forKey: "pauseMusicDuringDictation"
+        )
         TranscriptDeliveryPreferences(
             speechCleanupEnabled: speechCleanupEnabled,
             deepEditingEnabled: deepEditingEnabled,
             typingBufferEnabled: typingBufferEnabled,
             characterPlaybackEnabled: characterPlaybackEnabled,
             characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
-            characterPlaybackTimingVariationEnabled: characterPlaybackTimingVariationEnabled
+            characterPlaybackRhythm: characterPlaybackRhythm
         ).save(to: .standard)
     }
 
@@ -469,7 +484,7 @@ final class AppModel: ObservableObject {
                 typingBufferEnabled: typingBufferEnabled,
                 characterPlaybackEnabled: characterPlaybackEnabled,
                 characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
-                characterPlaybackTimingVariationEnabled: characterPlaybackTimingVariationEnabled
+                characterPlaybackRhythm: characterPlaybackRhythm
             )
         )
     }
@@ -479,7 +494,7 @@ final class AppModel: ObservableObject {
         return .characterByCharacter(
             CharacterPlaybackPacing(
                 wordsPerMinute: characterPlaybackWordsPerMinute,
-                timingVariationEnabled: characterPlaybackTimingVariationEnabled
+                rhythm: characterPlaybackRhythm
             )
         )
     }
@@ -616,6 +631,7 @@ final class AppModel: ObservableObject {
         NSLog("Cadence stopped a live transcription: %@", String(describing: error))
         transcriptionTask = nil
         speechEngine.cancel()
+        mediaPlaybackController.end()
         state = .error(error.localizedDescription)
         startedAt = nil
         audioLevel = 0

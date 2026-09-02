@@ -200,7 +200,7 @@ import Testing
         typingBufferEnabled: true,
         characterPlaybackEnabled: true,
         characterPlaybackWordsPerMinute: 95,
-        characterPlaybackTimingVariationEnabled: true
+        characterPlaybackRhythm: .expressive
     )
     expected.save(to: defaults)
     #expect(TranscriptDeliveryPreferences.load(from: defaults) == expected)
@@ -231,6 +231,27 @@ import Testing
         #expect(DictationProfile.matching(configuration) == profile)
     }
 
+    let quick = try #require(DictationProfile.quick.configuration)
+    let normal = try #require(DictationProfile.normal.configuration)
+    let essay = try #require(DictationProfile.essay.configuration)
+    #expect(!quick.delivery.characterPlaybackEnabled)
+    #expect(!normal.delivery.characterPlaybackEnabled)
+    #expect(essay.delivery.characterPlaybackEnabled)
+    #expect(essay.delivery.deepEditingEnabled)
+
+    let personalizedEssay = DictationConfiguration(
+        recognitionProfile: essay.recognitionProfile,
+        delivery: TranscriptDeliveryPreferences(
+            speechCleanupEnabled: essay.delivery.speechCleanupEnabled,
+            deepEditingEnabled: essay.delivery.deepEditingEnabled,
+            typingBufferEnabled: essay.delivery.typingBufferEnabled,
+            characterPlaybackEnabled: essay.delivery.characterPlaybackEnabled,
+            characterPlaybackWordsPerMinute: 145,
+            characterPlaybackRhythm: .expressive
+        )
+    )
+    #expect(DictationProfile.matching(personalizedEssay) == .essay)
+
     let custom = DictationConfiguration(
         recognitionProfile: .accurate,
         delivery: TranscriptDeliveryPreferences(
@@ -239,8 +260,20 @@ import Testing
             typingBufferEnabled: false,
             characterPlaybackEnabled: true,
             characterPlaybackWordsPerMinute: 135,
-            characterPlaybackTimingVariationEnabled: false
+            characterPlaybackRhythm: .steady
         )
     )
     #expect(DictationProfile.matching(custom) == .custom)
+}
+
+@Test func legacyTimingVariationMigratesToNaturalRhythm() throws {
+    let suiteName = "app.cadence.tests.preferences.legacy.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    defaults.set(true, forKey: "characterPlaybackTimingVariationEnabled")
+    #expect(TranscriptDeliveryPreferences.load(from: defaults).characterPlaybackRhythm == .natural)
+
+    defaults.set(CharacterPlaybackRhythm.expressive.rawValue, forKey: "characterPlaybackRhythm")
+    #expect(TranscriptDeliveryPreferences.load(from: defaults).characterPlaybackRhythm == .expressive)
 }

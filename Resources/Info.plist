@@ -30,6 +30,8 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Cadence uses the microphone to turn your voice into text.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Cadence pauses Music or Spotify while you dictate when you enable Pause music.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>SUFeedURL</key>
