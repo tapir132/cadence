@@ -9,6 +9,20 @@ enum UpdateChannel: String, CaseIterable, Identifiable {
     var title: String { self == .stable ? "Release" : "Edge" }
 }
 
+struct StartupUpdatePromptGate {
+    private(set) var isPending = false
+
+    mutating func queue() {
+        isPending = true
+    }
+
+    mutating func consumeIfReady(canCheck: Bool, sessionInProgress: Bool) -> Bool {
+        guard isPending, canCheck, !sessionInProgress else { return false }
+        isPending = false
+        return true
+    }
+}
+
 /// Sparkle owns update scheduling, signature verification, atomic installation,
 /// and relaunching. Cadence only exposes the user-controlled preferences.
 @MainActor
@@ -48,6 +62,7 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var hasStarted = false
     private var startupProbeInProgress = false
     private var startupProbeFoundUpdate = false
+    private var startupPromptGate = StartupUpdatePromptGate()
     private var cancellables = Set<AnyCancellable>()
 
     private override init() {
@@ -63,7 +78,11 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
 
         controller.updater.publisher(for: \.canCheckForUpdates)
             .receive(on: RunLoop.main)
-            .sink { [weak self] in self?.canCheckForUpdates = $0 }
+            .sink { [weak self] canCheck in
+                guard let self else { return }
+                self.canCheckForUpdates = canCheck
+                if canCheck { self.presentStartupUpdateIfReady() }
+            }
             .store(in: &cancellables)
     }
 
@@ -104,11 +123,19 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
         startupProbeFoundUpdate = false
         guard shouldPrompt else { return }
 
-        // The probe's session has ended at this callback. Start the visible
-        // cycle on the next run-loop turn so Sparkle can present its standard UI.
-        DispatchQueue.main.async { [weak self] in
-            self?.controller.checkForUpdates(nil)
-        }
+        // Some Sparkle runtimes invoke the delegate before clearing their
+        // session flag. Calling checkForUpdates here is then silently ignored.
+        // Wait for canCheckForUpdates to become true before presenting.
+        startupPromptGate.queue()
+        presentStartupUpdateIfReady()
+    }
+
+    private func presentStartupUpdateIfReady() {
+        guard startupPromptGate.consumeIfReady(
+            canCheck: controller.updater.canCheckForUpdates,
+            sessionInProgress: controller.updater.sessionInProgress
+        ) else { return }
+        controller.checkForUpdates(nil)
     }
 
     func feedURLString(for updater: SPUUpdater) -> String? {

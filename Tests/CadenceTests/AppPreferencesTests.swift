@@ -154,6 +154,23 @@ import Testing
     #expect(UpdateChannel.edge.title == "Edge")
 }
 
+@Test func startupUpdatePromptWaitsForSparkleSessionToBecomeReady() {
+    var gate = StartupUpdatePromptGate()
+    gate.queue()
+
+    let blockedWhileBusy = gate.consumeIfReady(canCheck: false, sessionInProgress: true)
+    #expect(!blockedWhileBusy)
+    #expect(gate.isPending)
+    let blockedUntilSessionEnds = gate.consumeIfReady(canCheck: true, sessionInProgress: true)
+    #expect(!blockedUntilSessionEnds)
+    #expect(gate.isPending)
+    let presentedWhenReady = gate.consumeIfReady(canCheck: true, sessionInProgress: false)
+    #expect(presentedWhenReady)
+    #expect(!gate.isPending)
+    let doesNotPresentTwice = gate.consumeIfReady(canCheck: true, sessionInProgress: false)
+    #expect(!doesNotPresentTwice)
+}
+
 @Test func allFloatingBarPlacementsRoundTrip() throws {
     for placement in BarPlacement.allCases {
         let data = try JSONEncoder().encode(placement)
