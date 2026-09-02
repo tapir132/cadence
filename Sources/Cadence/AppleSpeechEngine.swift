@@ -65,16 +65,32 @@ actor LiveSpeechTranscriber {
     private var manager: StreamingUnifiedAsrManager?
     private var vad: VadManager?
     private var loadedProfile: RecognitionProfile?
+    private var desiredProfile: RecognitionProfile = .fast
+    private var preparedManagers: [RecognitionProfile: StreamingUnifiedAsrManager] = [:]
     private var preparation: ModelPreparation?
 
     func prepare(
         profile: RecognitionProfile = .fast,
         onProgress: @escaping @Sendable (Double?) -> Void
     ) async throws {
+        desiredProfile = profile
+        if let prepared = preparedManagers[profile], vad != nil {
+            manager = prepared
+            loadedProfile = profile
+            return
+        }
         if manager != nil, vad != nil, loadedProfile == profile { return }
         if let preparation {
             try await complete(preparation)
-            if manager != nil, vad != nil, loadedProfile == profile { return }
+            // A newer Settings choice supersedes this caller while model loading
+            // is suspended. The completed model stays warm for a later switch,
+            // but it must not silently become the active recognizer.
+            guard desiredProfile == profile else { return }
+            if let prepared = preparedManagers[profile], vad != nil {
+                manager = prepared
+                loadedProfile = profile
+                return
+            }
         }
 
         let existingVad = vad
@@ -105,13 +121,12 @@ actor LiveSpeechTranscriber {
         do {
             let prepared = try await pending.task.value
             guard preparation?.id == pending.id else { return }
-            let previousManager = manager
-            manager = prepared.manager
+            preparedManagers[pending.profile] = prepared.manager
             vad = prepared.vad
-            loadedProfile = pending.profile
             preparation = nil
-            if let previousManager, previousManager !== prepared.manager {
-                await previousManager.cleanup()
+            if desiredProfile == pending.profile {
+                manager = prepared.manager
+                loadedProfile = pending.profile
             }
         } catch {
             if preparation?.id == pending.id { preparation = nil }

@@ -192,17 +192,21 @@ struct LiveTranscriptEmitter {
         let cleaned = SpeechCleanupFormatter.format(transcript, enabled: cleanupEnabled)
         let punctuated = SpokenPunctuationFormatter.format(cleaned)
         let dictionaryCorrected = DictionaryTermFormatter.apply(to: punctuated, terms: dictionaryTerms)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let styled = SpokenStyleFormatter.format(dictionaryCorrected)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
         let sentenceCased = Self.endsInSentenceMark(completedText)
-            ? Self.capitalizingSentenceStart(dictionaryCorrected)
-            : dictionaryCorrected
+            ? Self.capitalizingSentenceStart(styled)
+            : styled
         return SnippetFormatter.format(sentenceCased, snippets: snippets)
     }
 
     private func insertionDelta(_ rawDelta: String) -> String {
         guard !rawDelta.isEmpty else { return "" }
         let startsNewSegment = insertedCurrentPrefix.isEmpty && !completedText.isEmpty
-        return (startsNewSegment ? " " : "") + rawDelta
+        let needsSeparator = startsNewSegment
+            && completedText.last?.isWhitespace != true
+            && rawDelta.first?.isWhitespace != true
+        return (needsSeparator ? " " : "") + rawDelta
     }
 
     /// When the optional buffer is enabled, a safe prefix must remain present
@@ -254,13 +258,27 @@ struct LiveTranscriptEmitter {
         if let boundary = [commandBoundary, dictionaryBoundary, snippetBoundary].compactMap({ $0 }).min() {
             return String(transcript[..<boundary])
         }
+        // Keep a paragraph command atomic. Once the following word arrives,
+        // both newlines become a safe prefix together; a pause/finalization also
+        // flushes them immediately.
+        if let last = transcript.last, last == "\n" {
+            var boundary = transcript.endIndex
+            while boundary > transcript.startIndex {
+                let previous = transcript.index(before: boundary)
+                guard transcript[previous] == "\n" else { break }
+                boundary = previous
+            }
+            return String(transcript[..<boundary])
+        }
         guard let boundary = transcript.lastIndex(where: { $0.isWhitespace }) else { return "" }
         return String(transcript[..<boundary])
     }
 
     static func ensureSentencePunctuation(_ text: String) -> String {
+        let trailingBreakCount = text.reversed().prefix(while: { $0 == "\n" }).count
+        let trailingBreaks = String(repeating: "\n", count: min(trailingBreakCount, 2))
         var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !result.isEmpty else { return result }
+        guard !result.isEmpty else { return trailingBreaks }
 
         let closers = CharacterSet(charactersIn: "\"'”’)]}")
         var significant = result.index(before: result.endIndex)
@@ -269,13 +287,13 @@ struct LiveTranscriptEmitter {
             significant = result.index(before: significant)
         }
 
-        if sentenceMarks.contains(result[significant]) { return result }
+        if sentenceMarks.contains(result[significant]) { return result + trailingBreaks }
         if softPunctuation.contains(result[significant]) {
             result.replaceSubrange(significant...significant, with: ".")
         } else {
             result.insert(".", at: result.index(after: significant))
         }
-        return result
+        return result + trailingBreaks
     }
 
     /// A reset decoder occasionally begins the next segment with lowercase
@@ -305,7 +323,8 @@ struct LiveTranscriptEmitter {
         let closers = CharacterSet(charactersIn: "\"'”’)]}")
         var significant = text.index(before: text.endIndex)
         while significant > text.startIndex,
-              text[significant].unicodeScalars.allSatisfy({ closers.contains($0) }) {
+              text[significant].isWhitespace
+                || text[significant].unicodeScalars.allSatisfy({ closers.contains($0) }) {
             significant = text.index(before: significant)
         }
         return sentenceMarks.contains(text[significant])
@@ -314,7 +333,8 @@ struct LiveTranscriptEmitter {
     private static func join(_ prefix: String, _ suffix: String) -> String {
         if prefix.isEmpty { return suffix }
         if suffix.isEmpty { return prefix }
-        return prefix + " " + suffix
+        let needsSeparator = prefix.last?.isWhitespace != true && suffix.first?.isWhitespace != true
+        return prefix + (needsSeparator ? " " : "") + suffix
     }
 
     private static let sentenceMarks: Set<Character> = [".", "!", "?"]

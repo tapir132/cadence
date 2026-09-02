@@ -54,7 +54,9 @@ final class AppModel: ObservableObject {
     @Published var recognitionProfile: RecognitionProfile = .fast {
         didSet {
             saveSettings()
-            guard settingsAreLoaded, recognitionProfile != oldValue else { return }
+            guard settingsAreLoaded,
+                  !isApplyingDictationProfile,
+                  recognitionProfile != oldValue else { return }
             speechModelStatus = .preparing(progress: nil)
             Task { [weak self] in await self?.prepareSpeechModel() }
         }
@@ -80,6 +82,7 @@ final class AppModel: ObservableObject {
     private var insertionVerificationTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
     private var settingsAreLoaded = false
+    private var isApplyingDictationProfile = false
 
     var isListening: Bool { state == .listening || state == .finishing }
     var lastTranscript: String { records.first?.text ?? "" }
@@ -90,6 +93,9 @@ final class AppModel: ObservableObject {
         return valid.reduce(0) { $0 + $1.wordsPerMinute } / valid.count
     }
     var currentDuration: TimeInterval { startedAt.map { Date().timeIntervalSince($0) } ?? 0 }
+    var dictationProfile: DictationProfile {
+        DictationProfile.matching(currentDictationConfiguration)
+    }
 
     private init() {
         records = Self.loadRecords()
@@ -401,8 +407,30 @@ final class AppModel: ObservableObject {
         injector.enqueue(lastTranscript)
     }
 
+    func applyDictationProfile(_ profile: DictationProfile) {
+        guard let configuration = profile.configuration else { return }
+        let recognitionChanged = recognitionProfile != configuration.recognitionProfile
+        let delivery = configuration.delivery
+
+        isApplyingDictationProfile = true
+        recognitionProfile = configuration.recognitionProfile
+        speechCleanupEnabled = delivery.speechCleanupEnabled
+        deepEditingEnabled = delivery.deepEditingEnabled
+        typingBufferEnabled = delivery.typingBufferEnabled
+        characterPlaybackEnabled = delivery.characterPlaybackEnabled
+        characterPlaybackWordsPerMinute = delivery.characterPlaybackWordsPerMinute
+        characterPlaybackTimingVariationEnabled = delivery
+            .characterPlaybackTimingVariationEnabled
+        isApplyingDictationProfile = false
+        saveSettings()
+
+        guard settingsAreLoaded, recognitionChanged else { return }
+        speechModelStatus = .preparing(progress: nil)
+        Task { [weak self] in await self?.prepareSpeechModel() }
+    }
+
     func saveSettings() {
-        guard settingsAreLoaded else { return }
+        guard settingsAreLoaded, !isApplyingDictationProfile else { return }
         if let data = try? JSONEncoder().encode(shortcut) { UserDefaults.standard.set(data, forKey: "shortcut") }
         UserDefaults.standard.set(barPlacement.rawValue, forKey: "barPlacement")
         UserDefaults.standard.set(barScale, forKey: "barScale")
@@ -431,6 +459,20 @@ final class AppModel: ObservableObject {
     }
 
     private var isError: Bool { hasError }
+
+    private var currentDictationConfiguration: DictationConfiguration {
+        DictationConfiguration(
+            recognitionProfile: recognitionProfile,
+            delivery: TranscriptDeliveryPreferences(
+                speechCleanupEnabled: speechCleanupEnabled,
+                deepEditingEnabled: deepEditingEnabled,
+                typingBufferEnabled: typingBufferEnabled,
+                characterPlaybackEnabled: characterPlaybackEnabled,
+                characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
+                characterPlaybackTimingVariationEnabled: characterPlaybackTimingVariationEnabled
+            )
+        )
+    }
 
     private var textDeliveryMode: TextDeliveryMode {
         guard characterPlaybackEnabled else { return .chunked }

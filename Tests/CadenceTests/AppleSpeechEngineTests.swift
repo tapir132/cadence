@@ -240,6 +240,23 @@ func accurateProfileLoadsAndStreamsText() async throws {
     #expect(recorder.insertedText == final)
 }
 
+/// Both context encoders are expensive Core ML loads. Once each profile has
+/// been prepared, moving back to an earlier profile must select its warm manager
+/// instead of destroying and rebuilding it.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_STREAMING_MODEL_TEST"] == "1"))
+func preparedRecognitionProfilesSwitchWithoutReloading() async throws {
+    let transcriber = LiveSpeechTranscriber()
+    try await transcriber.prepare(profile: .fast) { _ in }
+    try await transcriber.prepare(profile: .accurate) { _ in }
+
+    let clock = ContinuousClock()
+    let started = clock.now
+    try await transcriber.prepare(profile: .fast) { _ in }
+    let elapsed = started.duration(to: clock.now)
+
+    #expect(elapsed < .milliseconds(250), "Warm profile switch took \(elapsed)")
+}
+
 /// Drives a spoken trigger through the production model and asserts that only
 /// the replacement—not an ordinary trigger followed by an edit—crosses the
 /// live insertion boundary.

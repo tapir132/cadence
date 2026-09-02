@@ -1,8 +1,16 @@
 import SwiftUI
 
+private enum RecognitionSettingsPage: String, CaseIterable, Identifiable {
+    case profiles = "Profiles"
+    case advanced = "Advanced"
+
+    var id: String { rawValue }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var updates = UpdateManager.shared
+    @State private var recognitionSettingsPage: RecognitionSettingsPage = .profiles
 
     var body: some View {
         ScrollView {
@@ -48,19 +56,25 @@ struct SettingsView: View {
                 VStack(spacing: 0) {
                     speechModelRow
                     line
-                    recognitionProfileRow
+                    recognitionSettingsPageRow
                     line
-                    speechCleanupRow
-                    line
-                    deepEditingRow
-                    line
-                    typingBufferRow
-                    line
-                    characterPlaybackRow
-                    line
-                    characterPlaybackSpeedRow
-                    line
-                    characterPlaybackVariationRow
+                    if recognitionSettingsPage == .profiles {
+                        dictationProfileRow
+                    } else {
+                        recognitionProfileRow
+                        line
+                        speechCleanupRow
+                        line
+                        deepEditingRow
+                        line
+                        typingBufferRow
+                        line
+                        characterPlaybackRow
+                        line
+                        characterPlaybackSpeedRow
+                        line
+                        characterPlaybackVariationRow
+                    }
                 }
                 .settingsSurface()
 
@@ -149,7 +163,7 @@ struct SettingsView: View {
                     HStack(spacing: 18) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Check automatically").font(.system(size: 13, weight: .semibold))
-                            Text("Looks for signed GitHub releases every six hours.")
+                            Text("Checks silently at launch and every six hours, then prompts when a newer signed build is available.")
                                 .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                         }
                         Spacer(minLength: 18)
@@ -282,7 +296,7 @@ struct SettingsView: View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Recognition profile").font(.system(size: 13, weight: .semibold))
-                Text("Both profiles use Parakeet Unified 0.6B. Accurate listens with more context and may download one additional local encoder.")
+                Text("Both use Parakeet Unified 0.6B. Accurate uses more context and may prepare one additional local encoder the first time; later switches keep both profiles warm.")
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -296,9 +310,83 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .frame(width: 176)
-            .disabled(model.isListening || speechModelIsPreparing)
+            .disabled(model.isListening)
         }
         .padding(16)
+    }
+
+    private var recognitionSettingsPageRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Setup").font(.system(size: 13, weight: .semibold))
+                Text("Start with a complete profile, or tune every behavior yourself.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+            }
+            Spacer(minLength: 18)
+            Picker("Recognition settings", selection: $recognitionSettingsPage) {
+                ForEach(RecognitionSettingsPage.allCases) { page in
+                    Text(page.rawValue).tag(page)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 210)
+        }
+        .padding(16)
+    }
+
+    private var dictationProfileRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 7) {
+                    Text("Dictation profile").font(.system(size: 13, weight: .semibold))
+                    if model.dictationProfile == .natural {
+                        Text("RECOMMENDED")
+                            .font(.system(size: 8, weight: .bold))
+                            .tracking(0.7)
+                            .foregroundStyle(CadenceTheme.muted)
+                    }
+                }
+                Text(model.dictationProfile.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if model.dictationProfile == .custom {
+                    Button("Review Advanced settings") {
+                        recognitionSettingsPage = .advanced
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11, weight: .semibold))
+                }
+            }
+            Spacer(minLength: 18)
+            Picker("Dictation profile", selection: dictationProfileBinding) {
+                ForEach(DictationProfile.presets) { profile in
+                    Text(profile == .natural ? "Natural (Recommended)" : profile.title)
+                        .tag(profile)
+                }
+                Divider()
+                Text("Custom").tag(DictationProfile.custom)
+            }
+            .labelsHidden()
+            .frame(width: 180)
+            .disabled(model.isListening)
+        }
+        .padding(16)
+    }
+
+    private var dictationProfileBinding: Binding<DictationProfile> {
+        Binding(
+            get: { model.dictationProfile },
+            set: { profile in
+                if profile == .custom {
+                    recognitionSettingsPage = .advanced
+                } else {
+                    model.applyDictationProfile(profile)
+                }
+            }
+        )
     }
 
     private var speechCleanupRow: some View {
@@ -311,7 +399,7 @@ struct SettingsView: View {
                         .tracking(0.8)
                         .foregroundStyle(CadenceTheme.muted)
                 }
-                Text("Removes hesitation sounds such as “um” and “uh” before they are typed. It does not rewrite text already inserted in another app.")
+                Text("Removes vocal pauses and punctuation-delimited asides such as “you know.” Context protects real uses such as “I like this.”")
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -330,7 +418,7 @@ struct SettingsView: View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("One-second stability buffer").font(.system(size: 13, weight: .semibold))
-                Text("Keeps the preview live, but waits for completed words to remain stable for one extra second before they reach your editor. Pauses and shortcut release still flush immediately.")
+                Text("Keeps the preview live, but waits one extra second before completed words reach your editor. Snippets do not require this; their triggers are held separately. Pauses and shortcut release still flush immediately.")
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -355,7 +443,7 @@ struct SettingsView: View {
                         .tracking(0.8)
                         .foregroundStyle(CadenceTheme.muted)
                 }
-                Text("After you finish, removes clear repeated starts and standalone “like” or “you know” fragments. It rewrites only the exact dictation span when the editor can verify it.")
+                Text("After you finish, uses repeated-word anchors, editing terms, and sentence grammar to repair clear restarts and false boundaries. It changes only a verified dictation span.")
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -444,11 +532,6 @@ struct SettingsView: View {
         }
         .disabled(model.isListening || !model.characterPlaybackEnabled)
         .padding(16)
-    }
-
-    private var speechModelIsPreparing: Bool {
-        if case .preparing = model.speechModelStatus { return true }
-        return false
     }
 
     private func permissionRow(_ title: String, detail: String, granted: Bool) -> some View {

@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
-enum RecognitionProfile: String, CaseIterable, Codable, Identifiable, Sendable {
+enum RecognitionProfile: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
     case fast
     case accurate
 
@@ -23,7 +23,7 @@ enum RecognitionProfile: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-struct TranscriptDeliveryPreferences: Equatable {
+struct TranscriptDeliveryPreferences: Equatable, Sendable {
     static let defaults = TranscriptDeliveryPreferences(
         speechCleanupEnabled: false,
         deepEditingEnabled: false,
@@ -86,6 +86,96 @@ struct TranscriptDeliveryPreferences: Equatable {
             characterPlaybackTimingVariationEnabled,
             forKey: "characterPlaybackTimingVariationEnabled"
         )
+    }
+}
+
+struct DictationConfiguration: Equatable, Sendable {
+    let recognitionProfile: RecognitionProfile
+    let delivery: TranscriptDeliveryPreferences
+}
+
+/// Coherent starting points for the growing set of recognition and delivery
+/// controls. `custom` is derived whenever a user changes any advanced value;
+/// it is not a separate persisted flag that can drift away from the settings.
+enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
+    case responsive
+    case natural
+    case polished
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .responsive: "Responsive"
+        case .natural: "Natural"
+        case .polished: "Polished"
+        case .custom: "Custom"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .responsive:
+            "Fastest path from speech to editor, with no optional cleanup or pacing."
+        case .natural:
+            "Stable completed words with human-paced character delivery and safe filler cleanup."
+        case .polished:
+            "More recognition context plus end-of-dictation repair for considered writing."
+        case .custom:
+            "Your Advanced settings do not match a built-in profile."
+        }
+    }
+
+    var configuration: DictationConfiguration? {
+        switch self {
+        case .responsive:
+            DictationConfiguration(
+                recognitionProfile: .fast,
+                delivery: TranscriptDeliveryPreferences(
+                    speechCleanupEnabled: false,
+                    deepEditingEnabled: false,
+                    typingBufferEnabled: false,
+                    characterPlaybackEnabled: false,
+                    characterPlaybackWordsPerMinute: 120,
+                    characterPlaybackTimingVariationEnabled: false
+                )
+            )
+        case .natural:
+            DictationConfiguration(
+                recognitionProfile: .fast,
+                delivery: TranscriptDeliveryPreferences(
+                    speechCleanupEnabled: true,
+                    deepEditingEnabled: false,
+                    typingBufferEnabled: true,
+                    characterPlaybackEnabled: true,
+                    characterPlaybackWordsPerMinute: 120,
+                    characterPlaybackTimingVariationEnabled: true
+                )
+            )
+        case .polished:
+            DictationConfiguration(
+                recognitionProfile: .accurate,
+                delivery: TranscriptDeliveryPreferences(
+                    speechCleanupEnabled: true,
+                    deepEditingEnabled: true,
+                    typingBufferEnabled: true,
+                    characterPlaybackEnabled: true,
+                    characterPlaybackWordsPerMinute: 100,
+                    characterPlaybackTimingVariationEnabled: true
+                )
+            )
+        case .custom:
+            nil
+        }
+    }
+
+    static var presets: [DictationProfile] {
+        allCases.filter { $0 != .custom }
+    }
+
+    static func matching(_ configuration: DictationConfiguration) -> DictationProfile {
+        presets.first { $0.configuration == configuration } ?? .custom
     }
 }
 

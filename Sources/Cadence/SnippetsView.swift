@@ -31,6 +31,10 @@ struct SnippetsView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(CadenceTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
+                    Text("No one-second buffer required—snippet triggers have their own safe hold until the next word or pause confirms them.")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CadenceTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 24)
                 Button {

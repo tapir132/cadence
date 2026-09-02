@@ -46,6 +46,8 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     private var isConfigured = false
     private var hasStarted = false
+    private var startupProbeInProgress = false
+    private var startupProbeFoundUpdate = false
     private var cancellables = Set<AnyCancellable>()
 
     private override init() {
@@ -72,8 +74,41 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
     func start() {
         guard !hasStarted, Bundle.main.bundleURL.pathExtension == "app" else { return }
         hasStarted = true
-        controller.startUpdater()
+        // The delegate feed must win on the very first update cycle, including
+        // after a channel change left an older URL in Sparkle's defaults.
         controller.updater.clearFeedURLFromUserDefaults()
+        controller.startUpdater()
+
+        // Sparkle's normal scheduler checks only after its interval elapses and
+        // may install automatic updates without surfacing a window. A launch
+        // probe is silent when current; if it finds a newer build, the follow-up
+        // user-facing cycle brings Sparkle's standard update prompt into focus.
+        guard controller.updater.automaticallyChecksForUpdates else { return }
+        startupProbeInProgress = true
+        startupProbeFoundUpdate = false
+        controller.updater.checkForUpdateInformation()
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        if startupProbeInProgress { startupProbeFoundUpdate = true }
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
+        error: (any Error)?
+    ) {
+        guard startupProbeInProgress, updateCheck == .updateInformation else { return }
+        let shouldPrompt = startupProbeFoundUpdate
+        startupProbeInProgress = false
+        startupProbeFoundUpdate = false
+        guard shouldPrompt else { return }
+
+        // The probe's session has ended at this callback. Start the visible
+        // cycle on the next run-loop turn so Sparkle can present its standard UI.
+        DispatchQueue.main.async { [weak self] in
+            self?.controller.checkForUpdates(nil)
+        }
     }
 
     func feedURLString(for updater: SPUUpdater) -> String? {

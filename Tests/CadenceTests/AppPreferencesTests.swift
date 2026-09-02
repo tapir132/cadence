@@ -199,3 +199,31 @@ import Testing
             == CharacterPlaybackPacing.wordsPerMinuteRange.upperBound
     )
 }
+
+@Test func dictationProfilesHaveDistinctConfigurationsAndDetectCustomSettings() throws {
+    let configurations = try DictationProfile.presets.map {
+        try #require($0.configuration)
+    }
+    #expect(configurations.count == 3)
+    #expect(configurations[0] != configurations[1])
+    #expect(configurations[0] != configurations[2])
+    #expect(configurations[1] != configurations[2])
+
+    for profile in DictationProfile.presets {
+        let configuration = try #require(profile.configuration)
+        #expect(DictationProfile.matching(configuration) == profile)
+    }
+
+    let custom = DictationConfiguration(
+        recognitionProfile: .accurate,
+        delivery: TranscriptDeliveryPreferences(
+            speechCleanupEnabled: false,
+            deepEditingEnabled: true,
+            typingBufferEnabled: false,
+            characterPlaybackEnabled: true,
+            characterPlaybackWordsPerMinute: 135,
+            characterPlaybackTimingVariationEnabled: false
+        )
+    )
+    #expect(DictationProfile.matching(custom) == .custom)
+}

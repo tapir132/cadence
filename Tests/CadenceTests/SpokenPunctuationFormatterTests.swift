@@ -7,6 +7,24 @@ import Testing
     #expect(SpokenPunctuationFormatter.format("Use full stop here") == "Use. here")
 }
 
+@Test func commaAndParagraphCommandsMatchMacDictationConventions() {
+    let transcript = "Hello, doctor Solarz, comma New paragraph. I can come during tutorial. period new paragraph Thank you period New paragraph Liam"
+    let punctuated = SpokenPunctuationFormatter.format(transcript)
+    let styled = SpokenStyleFormatter.format(punctuated)
+
+    #expect(
+        styled
+            == "Hello, Dr. Solarz,\n\nI can come during tutorial.\n\nThank you.\n\nLiam"
+    )
+}
+
+@Test func punctuationCommandsReplaceExistingModelPunctuation() {
+    #expect(SpokenPunctuationFormatter.format("Done. period") == "Done.")
+    #expect(SpokenPunctuationFormatter.format("Really. question mark.") == "Really?")
+    #expect(SpokenPunctuationFormatter.format("Hello, comma") == "Hello,")
+    #expect(SpokenPunctuationFormatter.format("Wait, comma new paragraph. Next") == "Wait,\n\nNext")
+}
+
 @Test func punctuationCommandsConsumeAutomaticTerminalPunctuation() {
     #expect(SpokenPunctuationFormatter.format("Finish this period.") == "Finish this.")
     #expect(SpokenPunctuationFormatter.format("Really question mark.") == "Really?")
@@ -45,4 +63,40 @@ import Testing
         continuesAfterPause: false
     )?.insertion ?? ""
     #expect(inserted == "Does this command work?")
+}
+
+@Test func partialParagraphCommandNeverLeaksCommandWords() throws {
+    var emitter = LiveTranscriptEmitter()
+    var inserted = ""
+
+    inserted += try emitter.consume("Thank you period new par")?.insertion ?? ""
+    #expect(inserted == "Thank you.")
+
+    inserted += try emitter.consume("Thank you period new paragraph Liam")?.insertion ?? ""
+    inserted += try emitter.finalize(
+        "Thank you period new paragraph Liam",
+        continuesAfterPause: false
+    )?.insertion ?? ""
+    #expect(inserted == "Thank you.\n\nLiam.")
+}
+
+@Test func paragraphCommandSurvivesItsOwnPauseAndCapitalizesTheNextSegment() throws {
+    var emitter = LiveTranscriptEmitter()
+    var inserted = ""
+
+    inserted += try emitter.finalize(
+        "Thank you period",
+        continuesAfterPause: true
+    )?.insertion ?? ""
+    inserted += try emitter.finalize(
+        "new paragraph",
+        continuesAfterPause: true
+    )?.insertion ?? ""
+    inserted += try emitter.finalize(
+        "liam",
+        continuesAfterPause: false
+    )?.insertion ?? ""
+
+    #expect(inserted == "Thank you.\n\nLiam.")
+    #expect(emitter.completedText == inserted)
 }
