@@ -287,13 +287,31 @@ struct LiveTranscriptEmitter {
             significant = result.index(before: significant)
         }
 
-        if sentenceMarks.contains(result[significant]) { return result + trailingBreaks }
+        let shouldBeQuestion = hasQuestionTag(in: result, through: significant)
+        if sentenceMarks.contains(result[significant]) {
+            if shouldBeQuestion, result[significant] == "." {
+                result.replaceSubrange(significant...significant, with: "?")
+            }
+            return result + trailingBreaks
+        }
+        let fallbackMark = shouldBeQuestion ? "?" : "."
         if softPunctuation.contains(result[significant]) {
-            result.replaceSubrange(significant...significant, with: ".")
+            result.replaceSubrange(significant...significant, with: fallbackMark)
         } else {
-            result.insert(".", at: result.index(after: significant))
+            result.insert(Character(fallbackMark), at: result.index(after: significant))
         }
         return result + trailingBreaks
+    }
+
+    /// A comma-delimited conversational tag is strong textual evidence of a
+    /// question even when the recognizer falls back to a period. Requiring the
+    /// delimiter keeps declarative uses such as “I will let you know” intact.
+    private static func hasQuestionTag(in text: String, through terminal: String.Index) -> Bool {
+        let candidate = String(text[...terminal])
+        return candidate.range(
+            of: #"(?i)[,;—–][ \t]*(?:you[ \t]+know|right|correct|okay|ok)[.,!?;:]?$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     /// A reset decoder occasionally begins the next segment with lowercase

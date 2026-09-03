@@ -118,6 +118,17 @@ import Testing
     )
 }
 
+@Test func punctuationNamesStayLiteralWhenDiscussedAsWordsOrSymbols() {
+    let missingMark = "For some reason it didn't add a question mark to that."
+    #expect(SpokenPunctuationFormatter.format(missingMark) == missingMark)
+
+    let explicitWords = "It should realize that I am saying the actual words question mark, not the symbol."
+    #expect(SpokenPunctuationFormatter.format(explicitWords) == explicitWords)
+
+    let correction = "That should have been a question mark right there, not a period."
+    #expect(SpokenPunctuationFormatter.format(correction) == correction)
+}
+
 @Test func literalPartialLayoutPhraseCanStreamWithoutBeingHeldAsACommand() throws {
     var emitter = LiveTranscriptEmitter()
     var inserted = ""

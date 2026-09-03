@@ -6,14 +6,7 @@ import Foundation
 /// marks instead of producing output such as `. .` or `,,`.
 enum SpokenPunctuationFormatter {
     static func format(_ transcript: String) -> String {
-        var result = transcript
-        for (pattern, replacement) in punctuationReplacements {
-            result = result.replacingOccurrences(
-                of: pattern,
-                with: replacement,
-                options: .regularExpression
-            )
-        }
+        var result = replacingPunctuationCommands(in: transcript)
         result = replacingLayoutCommands(in: result)
 
         // A punctuation command may follow punctuation inserted by the model.
@@ -71,7 +64,7 @@ enum SpokenPunctuationFormatter {
         guard isIncompleteCommand else { return nil }
 
         let commandStart = words[words.count - 2].startIndex
-        if command == "new", isLiteralLayoutPhrase(
+        if isLiteralCommandPhrase(
             in: transcript,
             phraseRange: commandStart..<transcript.endIndex
         ) {
@@ -90,14 +83,33 @@ enum SpokenPunctuationFormatter {
     /// The leading separator is part of the replacement so punctuation never
     /// receives a stray space. Optional punctuation immediately before the
     /// command is model-generated and is replaced by the explicit command.
-    private static let punctuationReplacements: [(String, String)] = [
-        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)question[ \t-]+mark\b[.,!?;:]?"#, "?"),
-        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)exclamation[ \t-]+(?:mark|point)\b[.,!?;:]?"#, "!"),
-        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)(?:period|full[ \t-]+stop)\b[.,!?;:]?"#, "."),
-        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)comma\b[.,!?;:]?"#, ","),
-        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)semicolon\b[.,!?;:]?"#, ";"),
-        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)colon\b[.,!?;:]?"#, ":")
+    private static let punctuationReplacements: [(pattern: String, replacement: String)] = [
+        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)(question[ \t-]+mark)\b[.,!?;:]?"#, "?"),
+        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)(exclamation[ \t-]+(?:mark|point))\b[.,!?;:]?"#, "!"),
+        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)((?:period|full[ \t-]+stop))\b[.,!?;:]?"#, "."),
+        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)(comma)\b[.,!?;:]?"#, ","),
+        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)(semicolon)\b[.,!?;:]?"#, ";"),
+        (#"(?i)(?:^|(?:[ \t]*[.,!?;:])?[ \t]+)(colon)\b[.,!?;:]?"#, ":")
     ]
+
+    private static func replacingPunctuationCommands(in text: String) -> String {
+        var result = text
+        for command in punctuationReplacements {
+            guard let expression = try? NSRegularExpression(pattern: command.pattern) else {
+                continue
+            }
+            let searchRange = NSRange(result.startIndex..<result.endIndex, in: result)
+            let matches = expression.matches(in: result, range: searchRange)
+            for match in matches.reversed() {
+                guard let matchRange = Range(match.range, in: result),
+                      let phraseRange = Range(match.range(at: 1), in: result),
+                      !isLiteralCommandPhrase(in: result, phraseRange: phraseRange)
+                else { continue }
+                result.replaceSubrange(matchRange, with: command.replacement)
+            }
+        }
+        return result
+    }
 
     /// A model often adds a period to “new paragraph” as if it were prose.
     /// Consume punctuation after the command, but preserve punctuation before
@@ -118,7 +130,7 @@ enum SpokenPunctuationFormatter {
             for match in matches.reversed() {
                 guard let matchRange = Range(match.range, in: result),
                       let phraseRange = Range(match.range(at: 1), in: result),
-                      !isLiteralLayoutPhrase(in: result, phraseRange: phraseRange)
+                      !isLiteralCommandPhrase(in: result, phraseRange: phraseRange)
                 else { continue }
                 result.replaceSubrange(matchRange, with: command.replacement)
             }
@@ -130,14 +142,14 @@ enum SpokenPunctuationFormatter {
     /// disambiguate a requested break from literal language. Determiners and
     /// metalinguistic words make “new line” or “new paragraph” part of the
     /// sentence, as in “goes into a new line” or “the words new paragraph.”
-    private static func isLiteralLayoutPhrase(
+    private static func isLiteralCommandPhrase(
         in text: String,
         phraseRange: Range<String.Index>
     ) -> Bool {
         let previous = word(before: phraseRange.lowerBound, in: text)
         let following = word(after: phraseRange.upperBound, in: text)
-        return previous.map(literalLayoutPredecessors.contains) == true
-            || following.map(literalLayoutFollowers.contains) == true
+        return previous.map(literalCommandPredecessors.contains) == true
+            || following.map(literalCommandFollowers.contains) == true
     }
 
     private static func word(before index: String.Index, in text: String) -> String? {
@@ -170,13 +182,15 @@ enum SpokenPunctuationFormatter {
         return text[start..<end].lowercased()
     }
 
-    private static let literalLayoutPredecessors: Set<String> = [
+    private static let literalCommandPredecessors: Set<String> = [
         "a", "an", "another", "called", "each", "every", "interpret",
         "interpreting", "interprets", "literal", "phrase", "say", "saying",
         "says", "spell", "spelled", "term", "the", "type", "typed", "typing",
-        "word", "words", "write", "writes", "writing", "wrote"
+        "word", "words", "write", "writes", "writing", "wrote", "named",
+        "punctuation", "symbol", "symbols", "than"
     ]
-    private static let literalLayoutFollowers: Set<String> = [
-        "are", "as", "is", "means", "meaning"
+    private static let literalCommandFollowers: Set<String> = [
+        "are", "as", "character", "command", "into", "is", "means", "meaning",
+        "punctuation", "symbol", "symbols", "with", "word", "words"
     ]
 }

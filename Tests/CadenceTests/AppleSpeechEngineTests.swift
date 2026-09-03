@@ -61,7 +61,7 @@ import Testing
 /// deterministic model tests below, this records the current Mac's real input
 /// while `say` speaks through its selected output device.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_LIVE_MIC_TEST"] == "1"))
-func liveMicrophoneKeepsLiteralNewLineWords() async throws {
+func liveMicrophonePreservesContextualWordsAndQuestionTag() async throws {
     #expect(AudioCaptureEngine.microphoneAuthorized, "Microphone access is required")
 
     let transcriber = LiveSpeechTranscriber()
@@ -76,7 +76,7 @@ func liveMicrophoneKeepsLiteralNewLineWords() async throws {
     }
 
     try await Task.sleep(for: .milliseconds(700))
-    let spoken = "It seems like when it goes into a new line in Terminal, it inserts spaces."
+    let spoken = "It should realize that I am saying the actual words question mark, not the symbol. It seems like when it goes into a new line in Terminal, it inserts spaces. You got to take the risk to have fun sometimes comma you know."
     try await Task.detached {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
@@ -92,8 +92,12 @@ func liveMicrophoneKeepsLiteralNewLineWords() async throws {
 
     let result = try await transcription.value
     print("Live microphone transcript: \(result.debugDescription)")
-    #expect(result.localizedCaseInsensitiveContains("new line"))
+    let lowercased = result.lowercased()
+    #expect(lowercased.contains("words question mark"))
+    #expect(!lowercased.contains("words?"))
+    #expect(lowercased.contains("new line"))
     #expect(!result.contains("\n"))
+    #expect(result.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?"))
 }
 
 /// Opt-in because it downloads the production streaming ASR and VAD models.

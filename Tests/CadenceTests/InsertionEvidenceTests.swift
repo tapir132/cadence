@@ -47,6 +47,55 @@ import Testing
     )
 }
 
+@Test func insertionEvidenceConfirmsExactLocalTextFromContentEditableEditor() {
+    // Chromium content-editables can expose a container-level value before the
+    // paste, then a leaf-level value afterward. The complete document strings
+    // are not directly comparable, but the exact text immediately before the
+    // reported caret is.
+    let inserted = "You got to take the risk to have fun sometimes, you know?"
+    let current = "Message #general\n\(inserted)"
+    let evidence = InsertionEvidence(
+        postingFailed: false,
+        targetApplicationChanged: false,
+        focusedElementChanged: false,
+        originalValue: "Message #general",
+        currentValue: current,
+        originalSelection: CFRange(location: 0, length: 0),
+        currentSelection: CFRange(location: current.utf16.count, length: 0)
+    )
+
+    #expect(InsertionEvidenceClassifier.classify(evidence, insertedText: inserted) == .confirmed)
+}
+
+@Test func insertionEvidenceTrustsExactTextWhenContentEditableCaretIsStale() {
+    let inserted = "You got to take the risk to have fun sometimes, you know?"
+    let evidence = InsertionEvidence(
+        postingFailed: false,
+        targetApplicationChanged: false,
+        focusedElementChanged: false,
+        originalValue: "",
+        currentValue: inserted,
+        originalSelection: CFRange(location: 0, length: 0),
+        currentSelection: CFRange(location: 0, length: 0)
+    )
+
+    #expect(InsertionEvidenceClassifier.classify(evidence, insertedText: inserted) == .confirmed)
+}
+
+@Test func insertionEvidenceDoesNotMistakePreexistingMatchingTextForAPaste() {
+    let evidence = InsertionEvidence(
+        postingFailed: false,
+        targetApplicationChanged: false,
+        focusedElementChanged: false,
+        originalValue: "hello",
+        currentValue: "hello",
+        originalSelection: CFRange(location: 5, length: 0),
+        currentSelection: CFRange(location: 5, length: 0)
+    )
+
+    #expect(InsertionEvidenceClassifier.classify(evidence, insertedText: "hello") == .failed)
+}
+
 @Test func insertionEvidenceTreatsOpaqueEditorsAsUnavailable() {
     let evidence = InsertionEvidence(
         postingFailed: false,

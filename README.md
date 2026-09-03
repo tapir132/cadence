@@ -27,6 +27,7 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Adjustable floating-bar size from 65% to 135%
 - Local transcript history and words-per-minute statistics
 - Failed-insertion detection with a non-activating transcript recovery card
+- Local bug-report export with settings, version, insertion status, and three recent transcripts
 - Signed automatic updates through Sparkle and GitHub Releases
 - Native SwiftUI and AppKit interface
 
@@ -75,7 +76,7 @@ Cadence re-checks these every few seconds while Settings is open, so changes mad
 
 Place the cursor in an editor, hold the configured shortcut while you speak, and release it to finish. The default is **Control–Option–Space**; a function key or a modifier-only chord such as ⌃⌥ works too.
 
-Say **“period”**, **“full stop”**, **“comma”**, **“question mark”**, **“new line”**, or **“new paragraph”** to format text instead of typing the command words. Cadence keeps layout words literal when sentence grammar makes their meaning clear—for example, “a new line” and “the words new paragraph.” Cadence also writes an honorific such as “doctor Solarz” as “Dr. Solarz.” These follow the conventions used by macOS Dictation.
+Say **“period”**, **“full stop”**, **“comma”**, **“question mark”**, **“new line”**, or **“new paragraph”** to format text instead of typing the command words. Cadence keeps command names literal when sentence grammar makes their meaning clear—for example, “a new line,” “the words new paragraph,” and “a question mark.” Cadence also writes an honorific such as “doctor Solarz” as “Dr. Solarz.” These follow the conventions used by macOS Dictation.
 
 The floating bar can stop or cancel dictation without activating the main Cadence window. When idle, it collapses into a slim edge-aware handle and expands when hovered. Drag the expanded logo to snap it to one of eight screen-edge positions. Hold Command while dragging for free placement. Double-click the logo to open Cadence; a single click never opens the app.
 
@@ -123,6 +124,7 @@ Please report security issues through the repository's private security advisory
 | `KeystrokeInjector` | Serializes focus-bound clipboard pastes to the target app |
 | `FloatingPanelController` | Manages the cross-Space, dockable, draggable recording surface |
 | `AppModel` | Coordinates sessions, permissions, preferences, and local history |
+| `CadenceBugReport` | Encodes a privacy-labeled local support snapshot for explicit export |
 | `TextInsertionVerifier` | Confirms delivery from accessibility text state and surfaces recoverable failures |
 | `UpdateManager` | Connects Sparkle's signed update lifecycle to the app and settings |
 

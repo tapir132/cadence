@@ -1,4 +1,6 @@
+@preconcurrency import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum RecognitionSettingsPage: String, CaseIterable, Identifiable {
     case profiles = "Profiles"
@@ -11,6 +13,9 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var updates = UpdateManager.shared
     @State private var recognitionSettingsPage: RecognitionSettingsPage = .profiles
+    @State private var bugReportExportMessage: String?
+    @State private var bugReportExportFailed = false
+    @State private var exportedBugReportURL: URL?
 
     var body: some View {
         ScrollView {
@@ -242,6 +247,10 @@ struct SettingsView: View {
                     .padding(16)
                 }
                 .settingsSurface()
+
+                sectionTitle("Support").padding(.top, 34)
+                bugReportRow
+                    .settingsSurface()
             }
             .padding(42)
             .frame(maxWidth: 860, alignment: .leading)
@@ -421,6 +430,81 @@ struct SettingsView: View {
         }
         .disabled(model.isListening)
         .padding(16)
+    }
+
+    private var bugReportRow: some View {
+        HStack(alignment: .center, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Export a bug report")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Saves app and macOS versions, permissions, settings, insertion status, and your three most recent transcripts. It never includes audio, clipboard contents, dictionary terms, or snippet text.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let bugReportExportMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: bugReportExportFailed ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                        Text(bugReportExportMessage)
+                        if let exportedBugReportURL, !bugReportExportFailed {
+                            Button("Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([exportedBugReportURL])
+                            }
+                            .buttonStyle(.link)
+                        }
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(bugReportExportFailed ? CadenceTheme.coral : CadenceTheme.muted)
+                    .padding(.top, 4)
+                }
+            }
+            Spacer(minLength: 18)
+            Button {
+                exportBugReport()
+            } label: {
+                Label("Export…", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Export Cadence bug report")
+        }
+        .padding(16)
+    }
+
+    private func exportBugReport() {
+        let generatedAt = Date()
+        let report = model.makeBugReport(
+            updateChannel: updates.channel,
+            automaticallyChecksForUpdates: updates.automaticallyChecks,
+            automaticallyDownloadsUpdates: updates.automaticallyDownloads,
+            generatedAt: generatedAt
+        )
+        let data: Data
+        do {
+            data = try report.encodedData()
+        } catch {
+            exportedBugReportURL = nil
+            bugReportExportFailed = true
+            bugReportExportMessage = "Could not prepare the report: \(error.localizedDescription)"
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Export Cadence Bug Report"
+        panel.prompt = "Export"
+        panel.nameFieldStringValue = CadenceBugReport.suggestedFilename(at: generatedAt)
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try data.write(to: url, options: .atomic)
+            exportedBugReportURL = url
+            bugReportExportFailed = false
+            bugReportExportMessage = "Saved \(url.lastPathComponent)"
+        } catch {
+            exportedBugReportURL = nil
+            bugReportExportFailed = true
+            bugReportExportMessage = "Could not save the report: \(error.localizedDescription)"
+        }
     }
 
     private var speechCleanupRow: some View {

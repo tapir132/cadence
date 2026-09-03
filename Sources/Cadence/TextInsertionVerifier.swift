@@ -2,7 +2,7 @@
 import ApplicationServices
 import Foundation
 
-enum InsertionVerificationResult: Equatable {
+enum InsertionVerificationResult: String, Codable, Equatable {
     case confirmed
     case failed
     case unavailable
@@ -40,12 +40,16 @@ struct InsertionEvidenceClassifier {
                 in: NSRange(location: originalRange.location, length: originalRange.length),
                 with: insertedText
             )
-            if current == expected {
-                guard let currentRange = evidence.currentSelection else { return .confirmed }
-                let expectedEnd = originalRange.location + insertedText.utf16.count
-                return currentRange.location == expectedEnd && currentRange.length == 0
-                    ? .confirmed
-                    : .failed
+            // Exact editor contents are definitive. Chromium content-editables
+            // sometimes expose a stale or container-relative caret even though
+            // their AXValue already contains the complete paste.
+            if current == expected { return .confirmed }
+            if current != original, containsExactInsertionBeforeCaret(
+                insertedText,
+                in: current,
+                selection: evidence.currentSelection
+            ) {
+                return .confirmed
             }
             if current != original { return .failed }
         } else if let originalRange = evidence.originalSelection,
@@ -75,6 +79,22 @@ struct InsertionEvidenceClassifier {
         default:
             false
         }
+    }
+
+    private static func containsExactInsertionBeforeCaret(
+        _ insertedText: String,
+        in currentValue: String,
+        selection: CFRange?
+    ) -> Bool {
+        guard let selection,
+              selection.location >= insertedText.utf16.count,
+              selection.length == 0,
+              selection.location <= currentValue.utf16.count else { return false }
+        let range = NSRange(
+            location: selection.location - insertedText.utf16.count,
+            length: insertedText.utf16.count
+        )
+        return (currentValue as NSString).substring(with: range) == insertedText
     }
 }
 

@@ -113,6 +113,24 @@ import Testing
     #expect(LiveTranscriptEmitter.ensureSentencePunctuation("He said \"hello\"") == "He said \"hello.\"")
 }
 
+@Test func finalizationRecognizesAQuestionTagDespiteModelPeriod() throws {
+    let transcript = "You got to take the risk to have fun sometimes, you know."
+    #expect(
+        LiveTranscriptEmitter.ensureSentencePunctuation(transcript)
+            == "You got to take the risk to have fun sometimes, you know?"
+    )
+
+    var emitter = LiveTranscriptEmitter()
+    let update = try emitter.finalize(transcript, continuesAfterPause: false)
+    #expect(update?.transcript == "You got to take the risk to have fun sometimes, you know?")
+    #expect(
+        LiveTranscriptEmitter.ensureSentencePunctuation(
+            "You got to take the risk to have fun sometimes, you know,"
+        ) == "You got to take the risk to have fun sometimes, you know?"
+    )
+    #expect(LiveTranscriptEmitter.ensureSentencePunctuation("I will let you know.") == "I will let you know.")
+}
+
 @Test func emitterRejectsAnyRevisionToAlreadyVisibleStreamingText() throws {
     var emitter = LiveTranscriptEmitter()
     _ = try emitter.consume("We write essays")

@@ -9,6 +9,7 @@ struct DictationRecord: Identifiable, Codable, Equatable {
     let appName: String
     let duration: TimeInterval
     let wordsPerMinute: Int
+    var insertionVerification: InsertionVerificationResult?
 }
 
 struct InsertionRecovery: Identifiable, Equatable {
@@ -419,6 +420,121 @@ final class AppModel: ObservableObject {
         injector.enqueue(lastTranscript)
     }
 
+    func makeBugReport(
+        updateChannel: UpdateChannel,
+        automaticallyChecksForUpdates: Bool,
+        automaticallyDownloadsUpdates: Bool,
+        generatedAt: Date = Date()
+    ) -> CadenceBugReport {
+        let bundle = Bundle.main
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "Development"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? "Unversioned"
+
+        let dictationStatus: String
+        let dictationError: String?
+        switch state {
+        case .idle:
+            dictationStatus = "idle"
+            dictationError = nil
+        case .listening:
+            dictationStatus = "listening"
+            dictationError = nil
+        case .finishing:
+            dictationStatus = "finishing"
+            dictationError = nil
+        case let .error(message):
+            dictationStatus = "error"
+            dictationError = message
+        }
+
+        let speechModelState: String
+        let speechModelError: String?
+        let speechModelProgress: Double?
+        switch speechModelStatus {
+        case let .preparing(progress):
+            speechModelState = "preparing"
+            speechModelError = nil
+            speechModelProgress = progress
+        case .ready:
+            speechModelState = "ready"
+            speechModelError = nil
+            speechModelProgress = nil
+        case let .failed(message):
+            speechModelState = "failed"
+            speechModelError = message
+            speechModelProgress = nil
+        }
+
+        return CadenceBugReport(
+            reportFormatVersion: 1,
+            generatedAt: generatedAt,
+            privacy: CadenceBugReport.privacyNotice,
+            application: .init(
+                version: version,
+                build: build,
+                bundleIdentifier: bundle.bundleIdentifier ?? "app.cadence.mac"
+            ),
+            system: .init(
+                operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+                architecture: CadenceBugReport.currentArchitecture
+            ),
+            permissions: .init(
+                microphone: microphoneAuthorized,
+                accessibility: accessibilityAuthorized
+            ),
+            settings: .init(
+                dictationProfile: dictationProfile.rawValue,
+                recognitionProfile: recognitionProfile.rawValue,
+                fillerWordCleanup: speechCleanupEnabled,
+                deeperEditing: deepEditingEnabled,
+                stabilityBuffer: typingBufferEnabled,
+                characterPlayback: characterPlaybackEnabled,
+                characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
+                characterPlaybackRhythm: characterPlaybackRhythm.rawValue,
+                pausesMusic: pauseMusicDuringDictation,
+                shortcut: .init(
+                    display: shortcut.displayText,
+                    keyCode: shortcut.keyCode,
+                    modifierFlags: shortcut.modifiersRawValue
+                ),
+                floatingBar: .init(
+                    placement: barPlacement.rawValue,
+                    scale: barScale,
+                    freePositionX: freeBarX,
+                    freePositionY: freeBarY
+                ),
+                updates: .init(
+                    channel: updateChannel.rawValue,
+                    checksAutomatically: automaticallyChecksForUpdates,
+                    downloadsAutomatically: automaticallyDownloadsUpdates
+                ),
+                customDictionaryTermCount: dictionary.count,
+                snippetCount: snippets.count
+            ),
+            status: .init(
+                dictation: dictationStatus,
+                dictationError: dictationError,
+                speechModel: speechModelState,
+                speechModelError: speechModelError,
+                speechModelPreparationProgress: speechModelProgress,
+                insertionRecoveryVisible: insertionRecovery != nil,
+                insertionRecoveryTargetApplication: insertionRecovery?.appName
+            ),
+            recentDictations: records.prefix(CadenceBugReport.transcriptLimit).map { record in
+                .init(
+                    date: record.date,
+                    text: record.text,
+                    targetApplication: record.appName,
+                    durationSeconds: record.duration,
+                    wordsPerMinute: record.wordsPerMinute,
+                    insertionVerification: record.insertionVerification?.rawValue
+                )
+            }
+        )
+    }
+
     func applyDictationProfile(_ profile: DictationProfile) {
         guard let configuration = profile.configuration else { return }
         let recognitionChanged = recognitionProfile != configuration.recognitionProfile
@@ -582,7 +698,7 @@ final class AppModel: ObservableObject {
                 }
             }
 
-            storeCompletedRecord(
+            let recordID = storeCompletedRecord(
                 deliveredText,
                 appName: completedTargetAppName,
                 duration: duration
@@ -600,6 +716,7 @@ final class AppModel: ObservableObject {
                 insertedText: verificationText,
                 postingFailed: injector.hadPostingFailure
             )
+            updateInsertionVerification(result, for: recordID)
             if result == .failed {
                 insertionRecovery = InsertionRecovery(
                     text: recoveryText,
@@ -609,21 +726,34 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @discardableResult
     private func storeCompletedRecord(
         _ text: String,
         appName: String,
         duration: TimeInterval
-    ) {
-        guard !text.isEmpty else { return }
+    ) -> UUID? {
+        guard !text.isEmpty else { return nil }
         let record = DictationRecord(
             id: UUID(), date: Date(), text: text, appName: appName,
             duration: duration,
-            wordsPerMinute: Int((Double(text.wordCount) / duration) * 60)
+            wordsPerMinute: Int((Double(text.wordCount) / duration) * 60),
+            insertionVerification: nil
         )
         records.insert(record, at: 0)
         records = Array(records.prefix(100))
         persistRecords()
         liveText = text
+        return record.id
+    }
+
+    private func updateInsertionVerification(
+        _ result: InsertionVerificationResult,
+        for recordID: UUID?
+    ) {
+        guard let recordID,
+              let index = records.firstIndex(where: { $0.id == recordID }) else { return }
+        records[index].insertionVerification = result
+        persistRecords()
     }
 
     private func failTranscription(_ error: Error) {
