@@ -197,6 +197,50 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// A three-step view over the two cleanup switches. Quick, Normal, and Essay
+/// map onto None, Light, and Medium, so this never conflicts with a profile.
+enum AutoCleanupLevel: String, CaseIterable, Identifiable, Sendable {
+    case none
+    case light
+    case medium
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: "None"
+        case .light: "Light"
+        case .medium: "Medium"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .none: "Types exactly what you said, including vocal pauses and restarts"
+        case .light: "Removes vocal pauses and detached asides before words appear"
+        case .medium: "Also repairs clear restarts and false sentence breaks after you finish"
+        }
+    }
+
+    var sample: String {
+        switch self {
+        case .none:
+            "So there needs to be, um, there needs to be a setting for this. Because my Apple dictation. Was messing that up."
+        case .light:
+            "So there needs to be there needs to be a setting for this. Because my Apple dictation. Was messing that up."
+        case .medium:
+            "So there needs to be a setting for this. Because my Apple dictation was messing that up."
+        }
+    }
+
+    init(speechCleanupEnabled: Bool, deepEditingEnabled: Bool) {
+        self = deepEditingEnabled ? .medium : (speechCleanupEnabled ? .light : .none)
+    }
+
+    var speechCleanupEnabled: Bool { self != .none }
+    var deepEditingEnabled: Bool { self == .medium }
+}
+
 enum BarPlacement: String, CaseIterable, Codable, Identifiable {
     case bottom
     case top

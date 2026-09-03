@@ -51,6 +51,7 @@ struct CadenceBugReport: Codable, Equatable {
         let updates: Updates
         let customDictionaryTermCount: Int
         let snippetCount: Int
+        let writingStyles: [String: String]
     }
 
     struct Status: Codable, Equatable {

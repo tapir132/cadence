@@ -64,3 +64,13 @@ import Testing
     #expect(CharacterPlaybackPacing(wordsPerMinute: 10).wordsPerMinute == 40)
     #expect(CharacterPlaybackPacing(wordsPerMinute: 500).wordsPerMinute == 160)
 }
+
+@Test func deleteBackwardIsAPlainDeleteKeyPressWithNoModifiers() throws {
+    let events = try #require(KeystrokeInjector.deleteBackwardEvents())
+    #expect(events.map(\.type) == [.keyDown, .keyUp])
+    #expect(events.map { $0.getIntegerValueField(.keyboardEventKeycode) } == [0x33, 0x33])
+    for event in events {
+        #expect(event.flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty)
+        #expect(event.getIntegerValueField(.eventSourceUserData) == CadenceSyntheticEvent.pasteCommandMarker)
+    }
+}

@@ -148,9 +148,14 @@ enum TextRewriteResult: Equatable {
 /// the dependable physical Command-V delivery mechanism.
 @MainActor
 final class KeystrokeInjector {
+    private enum Unit {
+        case text(String)
+        case deleteBackward
+    }
+
     private(set) var hadPostingFailure = false
     private var insertionTask: Task<Void, Never>?
-    private var pending: [String] = []
+    private var pending: [Unit] = []
     private var nextPendingIndex = 0
     private var expectedTarget: TextInsertionSnapshot?
     private var deliveryMode: TextDeliveryMode = .chunked
@@ -173,9 +178,13 @@ final class KeystrokeInjector {
         hadPostingFailure = false
     }
 
-    func enqueue(_ text: String) {
-        guard !text.isEmpty else { return }
-        pending.append(contentsOf: deliveryMode.units(for: text))
+    /// `deleteBackward` characters are removed before `text` is typed, in the
+    /// same serialized queue, so a retracted period can never race its
+    /// replacement words.
+    func enqueue(_ text: String, deleteBackward: Int = 0) {
+        guard !text.isEmpty || deleteBackward > 0 else { return }
+        pending.append(contentsOf: Array(repeating: Unit.deleteBackward, count: max(deleteBackward, 0)))
+        pending.append(contentsOf: deliveryMode.units(for: text).filter { !$0.isEmpty }.map(Unit.text))
         guard insertionTask == nil else { return }
         let generation = drainGeneration
         insertionTask = Task { [weak self] in await self?.drain(generation: generation) }
@@ -251,12 +260,14 @@ final class KeystrokeInjector {
     }
 
     private func drain(generation: Int) async {
-        while let text = dequeue(), !Task.isCancelled {
+        while let unit = dequeue(), !Task.isCancelled {
             let delivered: Bool
-            switch deliveryMode {
-            case .chunked:
+            switch (unit, deliveryMode) {
+            case (.deleteBackward, _):
+                delivered = await deleteBackward()
+            case let (.text(text), .chunked):
                 delivered = await deliverText(text, minimumInterval: .milliseconds(120))
-            case let .characterByCharacter(pacing):
+            case let (.text(text), .characterByCharacter(pacing)):
                 delivered = await deliverCharacter(text, pacing: pacing)
             }
 
@@ -270,7 +281,7 @@ final class KeystrokeInjector {
         if generation == drainGeneration { insertionTask = nil }
     }
 
-    private func dequeue() -> String? {
+    private func dequeue() -> Unit? {
         guard nextPendingIndex < pending.count else {
             pending.removeAll(keepingCapacity: true)
             nextPendingIndex = 0
@@ -283,6 +294,37 @@ final class KeystrokeInjector {
             nextPendingIndex = 0
         }
         return value
+    }
+
+    /// Retracts one character Cadence inserted, used when the next words prove
+    /// that an automatic period ended the sentence too early. An accessible
+    /// editor must show that period directly before the caret; otherwise the
+    /// document is left alone and the following words still arrive. Only a
+    /// focus change fails the queue, exactly as it does for a paste.
+    private func deleteBackward() async -> Bool {
+        guard AXIsProcessTrusted(), let expectedTarget,
+              TextInsertionVerifier.matchesCurrentTarget(expectedTarget) else { return false }
+        if TextInsertionVerifier.insertionPointFollows(".", in: expectedTarget) == false { return true }
+        let originalSelection = TextInsertionVerifier.currentSelection(expectedTarget)
+        guard let events = Self.deleteBackwardEvents() else { return true }
+        for event in events { event.post(tap: .cghidEventTap) }
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(400))
+        guard let originalSelection else {
+            await sleep(until: clock.now.advanced(by: .milliseconds(120)), clock: clock)
+            return true
+        }
+        while clock.now < deadline, !Task.isCancelled {
+            guard TextInsertionVerifier.matchesCurrentTarget(expectedTarget) else { return false }
+            if let current = TextInsertionVerifier.currentSelection(expectedTarget),
+               current.location == originalSelection.location - 1,
+               current.length == 0 {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(6))
+        }
+        return true
     }
 
     private func deliverCharacter(
@@ -412,13 +454,24 @@ final class KeystrokeInjector {
     /// Posts a complete physical Command+V sequence. Explicit Command key-down
     /// and key-up events are more dependable after sleep than flagging V alone.
     nonisolated static func pasteCommandEvents() -> [CGEvent]? {
-        let source = CGEventSource(stateID: .hidSystemState)
-        let steps: [(key: CGKeyCode, isDown: Bool, flags: CGEventFlags)] = [
+        keyEvents([
             (0x37, true, .maskCommand),
             (0x09, true, .maskCommand),
             (0x09, false, .maskCommand),
             (0x37, false, [])
-        ]
+        ])
+    }
+
+    /// A plain Delete press. Its empty flags matter: the person may still be
+    /// holding the ⌃⌥ dictation shortcut, and ⌥Delete would erase a word.
+    nonisolated static func deleteBackwardEvents() -> [CGEvent]? {
+        keyEvents([(0x33, true, []), (0x33, false, [])])
+    }
+
+    private nonisolated static func keyEvents(
+        _ steps: [(key: CGKeyCode, isDown: Bool, flags: CGEventFlags)]
+    ) -> [CGEvent]? {
+        let source = CGEventSource(stateID: .hidSystemState)
         let events = steps.compactMap { step -> CGEvent? in
             guard let event = CGEvent(
                 keyboardEventSource: source,

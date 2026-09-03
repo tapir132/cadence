@@ -214,6 +214,40 @@ enum TextInsertionVerifier {
         return InsertionEvidenceClassifier.classify(evidence, insertedText: insertedText)
     }
 
+    /// The focused window's title, used to recognize a web app inside a
+    /// browser. Requires Accessibility trust like every other check here.
+    static func focusedWindowTitle() -> String? {
+        guard AXIsProcessTrusted(),
+              let application = NSWorkspace.shared.frontmostApplication,
+              let window = focusedWindow(processIdentifier: application.processIdentifier) else { return nil }
+        var rawValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            window,
+            kAXTitleAttribute as CFString,
+            &rawValue
+        ) == .success else { return nil }
+        return rawValue as? String
+    }
+
+    /// Whether the character immediately before a collapsed caret is
+    /// `character`. `nil` when the editor exposes no text or caret, so the
+    /// caller can decide how much to trust a blind edit.
+    static func insertionPointFollows(
+        _ character: Character,
+        in snapshot: TextInsertionSnapshot
+    ) -> Bool? {
+        guard matchesCurrentElement(snapshot),
+              let value = stringValue(of: snapshot.focusedElement),
+              let selection = selectedRange(of: snapshot.focusedElement) else { return nil }
+        guard selection.length == 0,
+              selection.location > 0,
+              selection.location <= value.utf16.count else { return false }
+        let preceding = (value as NSString).substring(
+            with: NSRange(location: selection.location - 1, length: 1)
+        )
+        return preceding == String(character)
+    }
+
     static func matchesCurrentTarget(_ snapshot: TextInsertionSnapshot) -> Bool {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.processIdentifier,
               let currentWindow = focusedWindow(processIdentifier: snapshot.processIdentifier) else { return false }

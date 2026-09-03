@@ -77,6 +77,9 @@ final class AppModel: ObservableObject {
     /// This stays independent from Quick, Normal, and Essay so changing a
     /// dictation profile never changes the listening environment.
     @Published var pauseMusicDuringDictation = false { didSet { saveSettings() } }
+    @Published private(set) var writingStyles = WritingStylePreferences.defaults {
+        didSet { saveSettings() }
+    }
     @Published private(set) var freeBarX = 0.5
     @Published private(set) var freeBarY = 0.0
 
@@ -105,6 +108,18 @@ final class AppModel: ObservableObject {
     var dictationProfile: DictationProfile {
         DictationProfile.matching(currentDictationConfiguration)
     }
+    var autoCleanupLevel: AutoCleanupLevel {
+        get {
+            AutoCleanupLevel(
+                speechCleanupEnabled: speechCleanupEnabled,
+                deepEditingEnabled: deepEditingEnabled
+            )
+        }
+        set {
+            speechCleanupEnabled = newValue.speechCleanupEnabled
+            deepEditingEnabled = newValue.deepEditingEnabled
+        }
+    }
 
     private init() {
         records = Self.loadRecords()
@@ -132,6 +147,7 @@ final class AppModel: ObservableObject {
         pauseMusicDuringDictation = UserDefaults.standard.bool(
             forKey: "pauseMusicDuringDictation"
         )
+        writingStyles = WritingStylePreferences.load(from: .standard)
         freeBarX = UserDefaults.standard.object(forKey: "freeBarX") as? Double ?? 0.5
         freeBarY = UserDefaults.standard.object(forKey: "freeBarY") as? Double ?? 0
         if UserDefaults.standard.integer(forKey: "floatingBarDesignVersion") < 2 {
@@ -216,8 +232,15 @@ final class AppModel: ObservableObject {
             return
         }
 
-        targetAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Another app"
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        targetAppName = frontmost?.localizedName ?? "Another app"
         if targetAppName == "Cadence" { targetAppName = "the last active editor" }
+        let writingStyle = writingStyles.style(
+            for: WritingContext.detect(
+                bundleIdentifier: frontmost?.bundleIdentifier,
+                windowTitle: TextInsertionVerifier.focusedWindowTitle()
+            )
+        )
         liveText = ""
         committedText = ""
         insertionVerificationTask?.cancel()
@@ -248,7 +271,8 @@ final class AppModel: ObservableObject {
                         cleanupEnabled: cleanupEnabled,
                         dictionaryTerms: dictionaryTerms,
                         snippets: snippetSnapshot,
-                        insertionDelay: insertionDelay
+                        insertionDelay: insertionDelay,
+                        style: writingStyle
                     ) { [weak self] update in
                         await self?.consume(update)
                     }
@@ -336,6 +360,11 @@ final class AppModel: ObservableObject {
     }
 
     func removeDictionaryTerms(at offsets: IndexSet) { dictionary.remove(atOffsets: offsets) }
+
+    func setWritingTone(_ tone: WritingTone, for context: WritingContext) {
+        guard context.tones.contains(tone) else { return }
+        writingStyles.tones[context] = tone
+    }
 
     @discardableResult
     func saveSnippet(
@@ -516,7 +545,12 @@ final class AppModel: ObservableObject {
                     downloadsAutomatically: automaticallyDownloadsUpdates
                 ),
                 customDictionaryTermCount: dictionary.count,
-                snippetCount: snippets.count
+                snippetCount: snippets.count,
+                writingStyles: Dictionary(
+                    uniqueKeysWithValues: WritingContext.allCases.map {
+                        ($0.rawValue, writingStyles.tone(for: $0).rawValue)
+                    }
+                )
             ),
             status: .init(
                 dictation: dictationStatus,
@@ -572,6 +606,7 @@ final class AppModel: ObservableObject {
             pauseMusicDuringDictation,
             forKey: "pauseMusicDuringDictation"
         )
+        writingStyles.save(to: .standard)
         TranscriptDeliveryPreferences(
             speechCleanupEnabled: speechCleanupEnabled,
             deepEditingEnabled: deepEditingEnabled,
@@ -649,9 +684,9 @@ final class AppModel: ObservableObject {
         // emitter has already decided that it is safe to insert.
         liveText = update.transcript
         let insertion = update.insertion
-        guard !insertion.isEmpty else { return }
-        committedText += insertion
-        injector.enqueue(insertion)
+        guard !insertion.isEmpty || update.deleteBackward > 0 else { return }
+        committedText = String(committedText.dropLast(update.deleteBackward)) + insertion
+        injector.enqueue(insertion, deleteBackward: update.deleteBackward)
     }
 
     private func completeTranscription(_ rawText: String) {

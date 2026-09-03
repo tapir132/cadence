@@ -4,6 +4,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case home = "Home"
     case dictionary = "Dictionary"
     case snippets = "Snippets"
+    case style = "Style"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -12,6 +13,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .home: "rectangle.stack"
         case .dictionary: "text.book.closed"
         case .snippets: "scissors"
+        case .style: "textformat"
         case .settings: "slider.horizontal.3"
         }
     }
@@ -30,6 +32,7 @@ struct RootView: View {
                     case .home: HomeView()
                     case .dictionary: DictionaryView()
                     case .snippets: SnippetsView()
+                    case .style: StyleView()
                     case .settings: SettingsView()
                     }
                 }
@@ -89,6 +92,7 @@ struct RootView: View {
             sidebarButton(.home)
             sidebarButton(.dictionary)
             sidebarButton(.snippets)
+            sidebarButton(.style)
 
             Spacer()
 

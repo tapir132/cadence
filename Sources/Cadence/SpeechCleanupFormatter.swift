@@ -6,7 +6,11 @@ import Foundation
 /// punctuation marks them as a detached discourse aside. Semantic uses such as
 /// “I like this” and “it is well designed” remain untouched.
 enum SpeechCleanupFormatter {
-    static func format(_ transcript: String, enabled: Bool) -> String {
+    static func format(
+        _ transcript: String,
+        enabled: Bool,
+        capitalizeLeadingWord: Bool = true
+    ) -> String {
         guard enabled else { return transcript }
 
         var result = transcript
@@ -66,7 +70,7 @@ enum SpeechCleanupFormatter {
             options: .regularExpression
         )
         result = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        return removedLeadingPause || removedLeadingDiscourseMarker
+        return capitalizeLeadingWord && (removedLeadingPause || removedLeadingDiscourseMarker)
             ? capitalizingPlainLeadingWord(in: result)
             : result
     }

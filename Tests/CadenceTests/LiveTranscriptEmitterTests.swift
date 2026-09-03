@@ -37,24 +37,27 @@ import Testing
     #expect(secondFinal.transcript == inserted)
 }
 
-@Test func aLowercaseDecoderRestartIsCapitalizedAfterSentencePunctuation() throws {
+@Test func aLowercaseDecoderRestartIsCapitalizedAfterSpokenPunctuation() throws {
     var emitter = LiveTranscriptEmitter(dictionaryTerms: ["macOS"])
     var inserted = ""
 
+    // After punctuation the person asked for, a lowercase restart is a new
+    // sentence. After an automatic period it is a continuation signal instead
+    // (see the retraction tests below).
     inserted += try emitter.finalize(
-        "The first sentence",
+        "The first sentence period",
         continuesAfterPause: true
     )?.insertion ?? ""
     inserted += try emitter.consume("the next thought continues")?.insertion ?? ""
     #expect(inserted == "The first sentence. The next thought")
 
     let next = try emitter.finalize(
-        "the next thought continues",
+        "the next thought continues question mark",
         continuesAfterPause: true
     )
     inserted += next?.insertion ?? ""
     inserted += try emitter.consume("macOS remains mixed case")?.insertion ?? ""
-    #expect(inserted == "The first sentence. The next thought continues. macOS remains mixed")
+    #expect(inserted == "The first sentence. The next thought continues? macOS remains mixed")
 }
 
 @Test func grammaticalPauseFlushesTailWithoutInventingASentenceBoundary() throws {
@@ -176,4 +179,81 @@ import Testing
 
     let final = try emitter.finalize("We edit essays", continuesAfterPause: false)
     #expect(final?.insertion == " essays.")
+}
+
+@Test func lowercaseRestartAfterAnAutomaticPeriodRetractsItAndContinuesTheSentence() throws {
+    var emitter = LiveTranscriptEmitter()
+    var inserted = ""
+
+    inserted += try emitter.consume("There seems to be a bug right")?.insertion ?? ""
+    inserted += try emitter.flushPauseTail("There seems to be a bug right now")?.insertion ?? ""
+    inserted += try emitter.finalize("There seems to be a bug right now", continuesAfterPause: true)?.insertion ?? ""
+    #expect(inserted == "There seems to be a bug right now.")
+
+    // The first word alone is not enough evidence: nothing is inserted yet.
+    let single = try emitter.consume("where")
+    #expect(single?.insertion == "")
+    #expect(single?.deleteBackward == 0)
+
+    let joined = try #require(try emitter.consume("where the bottom"))
+    #expect(joined.deleteBackward == 1)
+    #expect(joined.insertion == " where the")
+    inserted = String(inserted.dropLast(joined.deleteBackward)) + joined.insertion
+    #expect(inserted == "There seems to be a bug right now where the")
+    #expect(joined.transcript == "There seems to be a bug right now where the bottom")
+
+    let next = try #require(try emitter.consume("where the bottom bar"))
+    #expect(next.deleteBackward == 0)
+    inserted += next.insertion
+    let final = try #require(try emitter.finalize("where the bottom bar is stuck", continuesAfterPause: false))
+    inserted += final.insertion
+    #expect(inserted == "There seems to be a bug right now where the bottom bar is stuck.")
+    #expect(final.transcript == inserted)
+}
+
+@Test func continuationStartersJoinEvenWhenTheDecoderCapitalizesThem() throws {
+    var emitter = LiveTranscriptEmitter()
+    var inserted = try emitter.finalize("It should keep typing", continuesAfterPause: true)?.insertion ?? ""
+    let joined = try #require(try emitter.consume("Until it's done"))
+    #expect(joined.deleteBackward == 1)
+    #expect(joined.insertion == " until it's")
+    inserted = String(inserted.dropLast()) + joined.insertion
+    inserted += try emitter.finalize("Until it's done", continuesAfterPause: false)?.insertion ?? ""
+    #expect(inserted == "It should keep typing until it's done.")
+}
+
+@Test func capitalizedOrdinaryRestartsAndSpokenPeriodsKeepTheSentenceBoundary() throws {
+    var emitter = LiveTranscriptEmitter(dictionaryTerms: ["macOS"])
+    var inserted = try emitter.finalize("I found a bug", continuesAfterPause: true)?.insertion ?? ""
+    let ordinary = try #require(try emitter.consume("The style tab"))
+    #expect(ordinary.deleteBackward == 0)
+    #expect(ordinary.insertion == " The style")
+    inserted += ordinary.insertion
+    inserted += try emitter.finalize("The style tab", continuesAfterPause: true)?.insertion ?? ""
+    #expect(inserted == "I found a bug. The style tab.")
+
+    // A lowercase product name at a real sentence start is not a restart signal.
+    let product = try #require(try emitter.consume("macOS is fine"))
+    #expect(product.deleteBackward == 0)
+    #expect(product.insertion == " macOS is")
+    inserted += product.insertion
+    inserted += try emitter.finalize("macOS is fine", continuesAfterPause: true)?.insertion ?? ""
+
+    // A period the person said out loud is never retracted.
+    let spokenPeriod = try emitter.finalize("Stop here period", continuesAfterPause: true)
+    #expect(spokenPeriod?.insertion == " Stop here.")
+    let afterSpoken = try #require(try emitter.consume("and then more"))
+    #expect(afterSpoken.deleteBackward == 0)
+    #expect(afterSpoken.insertion == " And then")
+    _ = try emitter.finalize("and then more", continuesAfterPause: false)
+    #expect(emitter.completedText == "I found a bug. The style tab. macOS is fine. Stop here. And then more.")
+}
+
+@Test func aJoinDecidedAtFinalizationStillRetractsThePeriod() throws {
+    var emitter = LiveTranscriptEmitter()
+    _ = try emitter.finalize("I like this better", continuesAfterPause: true)
+    let final = try #require(try emitter.finalize("than that", continuesAfterPause: false))
+    #expect(final.deleteBackward == 1)
+    #expect(final.insertion == " than that.")
+    #expect(final.transcript == "I like this better than that.")
 }

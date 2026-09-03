@@ -122,7 +122,9 @@ func streamingModelCommitsSentenceTailDuringPauseAndContinues() async throws {
     let first = try converter.resampleAudioFile(firstURL)
     let finalSamples = try converter.resampleAudioFile(finalURL)
     let initialSilence = Array(repeating: Float.zero, count: 16_000)
-    let silence = Array(repeating: Float.zero, count: 32_000)
+    // Three seconds covers Silero's 750 ms end-of-speech report plus the
+    // uncertain-boundary grace, so the fallback period lands inside the pause.
+    let silence = Array(repeating: Float.zero, count: 48_000)
 
     let transcriber = LiveSpeechTranscriber()
     try await transcriber.prepare { _ in }
@@ -166,6 +168,43 @@ func streamingModelCommitsSentenceTailDuringPauseAndContinues() async throws {
             "Streaming output revised already-visible text: \(previous.transcript) -> \(next.transcript)"
         )
     }
+}
+
+/// The longer uncertain-boundary grace keeps one decoder stream open across a
+/// short pause. A complete sentence followed by a new one inside that window
+/// must therefore receive its period from the model itself.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_STREAMING_MODEL_TEST"] == "1"))
+func streamingModelPunctuatesANewSentenceThatBeginsWithinTheGrace() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cadence-grace-test-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let firstURL = directory.appendingPathComponent("first.aiff")
+    let secondURL = directory.appendingPathComponent("second.aiff")
+    try synthesize("These are the first words of the dictation.", to: firstURL)
+    try synthesize("The second sentence starts after a short pause.", to: secondURL)
+    let firstSamples = try AudioConverter().resampleAudioFile(firstURL)
+        + Array(repeating: Float.zero, count: 20_000)
+    let secondSamples = try AudioConverter().resampleAudioFile(secondURL)
+        + Array(repeating: Float.zero, count: 48_000)
+
+    let transcriber = LiveSpeechTranscriber()
+    try await transcriber.prepare { _ in }
+    let (audio, continuation) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
+    let recorder = LiveUpdateRecorder()
+    let transcription = Task {
+        try await transcriber.transcribe(audio) { update in recorder.record(update) }
+    }
+
+    yieldSamples(firstSamples, to: continuation)
+    _ = try #require(await recorder.waitForInsertedSuffix("dictation"))
+    yieldSamples(secondSamples, to: continuation)
+    continuation.finish()
+
+    let final = try await transcription.value.lowercased()
+    #expect(final.contains("dictation. the second sentence"), "Updates: \(recorder.snapshot())")
+    #expect(recorder.insertedText.lowercased() == final)
 }
 
 /// Exact regression for a dependent clause that used to become two sentences

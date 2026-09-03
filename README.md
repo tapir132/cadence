@@ -9,6 +9,8 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Live on-device English transcription with NVIDIA Parakeet Unified 0.6B through FluidAudio
 - Append-only word emission with context-aware sentence boundaries after a pause
 - Continuous pause rollover, including punctuation and speech in later sentences
+- Live retraction of a period that a thinking pause invented, once the next words prove the sentence continued
+- Per-app writing style: Formal, Casual, Very casual, or Excited tones for personal messengers, work messengers, email, and everything else
 - Fast (320 ms) and Accurate (1.12 s) local recognition profiles
 - Quick, Normal, and Essay profiles labeled by use case, with complete manual controls under Advanced
 - Optional context-aware filler cleanup for vocal pauses and detached discourse asides
@@ -84,7 +86,11 @@ The floating bar can stop or cancel dictation without activating the main Cadenc
 
 Cadence captures 16 kHz mono audio for as long as the shortcut is held. Silero voice-activity detection prevents leading silence from reaching the recognizer and identifies a sustained pause. Parakeet Unified streams partial hypotheses with 320 ms model latency in Fast or 1.12 s in Accurate. Cadence holds the unfinished last word—and its punctuation—until a following boundary or pause confirms it. Safe completed words are inserted immediately.
 
-After about 750 ms of speech-ending silence, Cadence inserts the sentence tail and classifies the boundary. Explicit or model-supplied terminal punctuation closes immediately. A dependent clause such as “Because my Apple dictation…” and a subject still waiting for its predicate, such as “The whole point of the app…”, keep the same decoder stream and language context when speech resumes. Other uncertain fragments get a short grace window; if silence continues, Cadence closes them with punctuation and starts a fresh stream without ending the held shortcut. Releasing the shortcut finalizes any open thought. If a reset decoder returns lowercase text after a real sentence mark, Cadence restores the initial capital before insertion.
+After about 750 ms of speech-ending silence, Cadence inserts the sentence tail and classifies the boundary. Explicit or model-supplied terminal punctuation closes immediately. A dependent clause such as “Because my Apple dictation…”, a subject still waiting for its predicate, such as “The whole point of the app…”, and a fragment ending in a preposition or a noun-subject copula (“things like…”, “the whole point is…”) keep the same decoder stream and language context when speech resumes. Other uncertain fragments get roughly 1.5 s more; if silence continues, Cadence closes them with a period and starts a fresh stream without ending the held shortcut. Releasing the shortcut finalizes any open thought.
+
+That automatic period is provisional in one specific way. When the reset decoder restarts in lowercase, or the next segment begins with a word that cannot open a sentence (“which”, “than”, “until”, “especially”), the pause was mid-sentence: Cadence deletes the period with a single Delete keystroke, then continues with the lowercase word. The retraction is queued in the same serialized paste queue, and an accessible editor must show that period immediately before the caret or the document is left alone. A period you said out loud, a question mark, or a paragraph break is never retracted; after those, a lowercase restart is capitalized as a new sentence.
+
+The Style section chooses a tone per app category. Cadence recognizes personal messengers, work messengers, and email apps from the frontmost app's bundle identifier, and web apps such as Gmail, Slack, or WhatsApp from the browser tab title; everything else is “Other”. Formal keeps the model's capitalization and punctuation. Casual drops the model's commas (spoken “comma” stays) and, in messengers, the closing period of the dictation. Very casual also lowercases sentence starts while preserving “I”, mixed-case words, and dictionary terms. Excited turns the closing period into an exclamation mark. If you release the shortcut after a pause already closed the last sentence, Casual and Excited retract that period through the same Delete path. The Auto cleanup tab is a three-step view of the filler-cleanup and Deeper editing switches that Quick, Normal, and Essay also set.
 
 Personal-dictionary matching occurs before text becomes visible. Cadence can therefore hold a possible multiword name briefly and safely restore exact case and diacritics—for example, `Jose Arcadio Buendia` to `José Arcadio Buendía`—without editing text after it was pasted. It deliberately does not fuzzily turn a different decoded word such as `lamp` into `Liam`; use Accurate for more acoustic context, and save a dictionary entry to preserve spelling once the model hears the right name. Optional filler cleanup also runs at this pre-insertion stage. It removes unmistakable vocal pauses, while words such as “like,” “well,” and “you know” are removed only when punctuation marks them as detached asides. Semantic uses such as “I like this” remain untouched.
 
@@ -118,7 +124,8 @@ Please report security issues through the repository's private security advisory
 |---|---|
 | `AudioCaptureEngine` | Captures and streams ordered 16 kHz mono microphone chunks |
 | `LiveSpeechTranscriber` | Runs Silero VAD and streaming Parakeet Unified decoding with pause rollover |
-| `LiveTranscriptEmitter` | Holds the unfinished word and emits only safe append-only text deltas |
+| `LiveTranscriptEmitter` | Holds the unfinished word and emits only safe append-only text deltas, plus a single-period retraction when a pause split a sentence |
+| `WritingStyle` | Detects the app category and applies the chosen tone's punctuation and capitalization rules |
 | `DeepSpeechCleanupFormatter` | Applies bounded opt-in revisions after dictation finishes |
 | `SnippetFormatter` | Replaces exact spoken triggers while keeping their live frontier provisional |
 | `KeystrokeInjector` | Serializes focus-bound clipboard pastes to the target app |

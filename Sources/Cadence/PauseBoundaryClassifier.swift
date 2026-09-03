@@ -39,6 +39,20 @@ enum PauseBoundaryClassifier {
             return .continuation
         }
 
+        // Thinking pauses in this corpus land after a preposition or degree
+        // word (“things like”, “a lot of”, “it's really”), and after a copula
+        // or modal whose subject is a noun phrase (“the whole point is”).
+        // “I like that” and “yes it is” stay uncertain because a pronoun
+        // subject makes those endings complete.
+        if let last = words.last, words.count > 1 {
+            let previous = words[words.count - 2]
+            if trailingPrepositions.contains(last) { return .continuation }
+            if last == "like", !pronounSubjects.contains(previous) { return .continuation }
+            if trailingAuxiliaries.contains(last), !pronounSubjects.contains(previous) {
+                return .continuation
+            }
+        }
+
         // A trailing "that" after a linking or reporting verb introduces a
         // complement; it is not the end of the thought. Keep cases such as
         // "I like that" uncertain rather than treating every final "that" as
@@ -106,6 +120,21 @@ enum PauseBoundaryClassifier {
     private static let trailingContinuationWords: Set<String> = [
         "a", "although", "an", "and", "because", "but", "either", "if", "my",
         "nor", "or", "our", "the", "their", "unless", "whereas", "your"
+    ]
+
+    private static let trailingPrepositions: Set<String> = [
+        "about", "as", "at", "for", "from", "into", "just", "of", "really",
+        "than", "to", "very", "with"
+    ]
+
+    private static let trailingAuxiliaries: Set<String> = [
+        "are", "can", "could", "had", "has", "have", "is", "might", "must",
+        "should", "was", "were", "will", "would"
+    ]
+
+    private static let pronounSubjects: Set<String> = [
+        "he", "here", "i", "it", "one", "she", "so", "that", "there", "they",
+        "this", "we", "what", "which", "who", "you"
     ]
 
     private static let trailingContinuationPhrases: [[String]] = [

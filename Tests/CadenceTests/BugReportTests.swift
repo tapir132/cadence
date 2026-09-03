@@ -25,7 +25,8 @@ import Testing
             floatingBar: .init(placement: "bottom", scale: 1, freePositionX: 0.5, freePositionY: 0),
             updates: .init(channel: "edge", checksAutomatically: true, downloadsAutomatically: true),
             customDictionaryTermCount: 3,
-            snippetCount: 2
+            snippetCount: 2,
+            writingStyles: ["personalMessages": "casual", "email": "formal"]
         ),
         status: .init(
             dictation: "idle",
@@ -53,6 +54,7 @@ import Testing
     #expect(encoded.contains("0.3.2-edge.abcdef0"))
     #expect(encoded.contains("Transcript 3"))
     #expect(encoded.contains("insertionVerification"))
+    #expect(encoded.contains("\"personalMessages\" : \"casual\""))
     #expect(encoded.contains(CadenceBugReport.privacyNotice))
     #expect(!encoded.contains("clipboardContents"))
 }

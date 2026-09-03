@@ -65,9 +65,11 @@ actor LiveSpeechTranscriber {
     private static let vadChunkSize = VadManager.chunkSize
     private static let preRollSampleCount = VadManager.chunkSize * 2
     // Silero has already observed sustained silence before it reports an end.
-    // Two additional blocks keep a brief mid-thought hesitation open without
-    // making sentence punctuation lag noticeably behind the visible tail.
-    private static let uncertainPauseGraceSamples = VadManager.chunkSize * 2
+    // An uncertain fragment is one the model itself declined to punctuate, so
+    // give a thinking pause about 1.5 s more before Cadence invents a period.
+    // Releasing the shortcut still closes the sentence immediately.
+    // ponytail: tune here if punctuation feels late; the join repair covers overshoot.
+    private static let uncertainPauseGraceSamples = VadManager.chunkSize * 6
 
     private struct PreparedModels: Sendable {
         let manager: StreamingUnifiedAsrManager
@@ -237,6 +239,7 @@ actor LiveSpeechTranscriber {
         dictionaryTerms: [String] = [],
         snippets: [TextSnippet] = [],
         insertionDelay: Duration = .zero,
+        style: WritingStyle = .standard,
         onUpdate: @escaping @Sendable (LiveTranscriptUpdate) async -> Void
     ) async throws -> String {
         guard let manager, let vad else {
@@ -248,7 +251,8 @@ actor LiveSpeechTranscriber {
             cleanupEnabled: cleanupEnabled,
             dictionaryTerms: dictionaryTerms,
             snippets: snippets,
-            insertionDelay: insertionDelay
+            insertionDelay: insertionDelay,
+            style: style
         )
         var vadState = VadStreamState.initial()
         var pendingSamples: [Float] = []
@@ -312,6 +316,9 @@ actor LiveSpeechTranscriber {
                     continuesAfterPause: false,
                     onUpdate: onUpdate
                 )
+            }
+            if let update = emitter.finishDictation() {
+                await onUpdate(update)
             }
 
             let transcript = emitter.completedText.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -11,6 +11,11 @@ struct LiveTranscriptUpdate: Sendable, Equatable {
     let insertion: String
 
     let sentenceFinal: Bool
+
+    /// Characters to remove from the end of the inserted text before
+    /// `insertion` is typed. Only an automatic period is ever retracted, once
+    /// the next words prove the sentence had not ended.
+    var deleteBackward = 0
 }
 
 enum LiveTranscriptError: LocalizedError, Equatable {
@@ -38,21 +43,31 @@ struct LiveTranscriptEmitter {
     private(set) var currentPartial = ""
     private(set) var insertedCurrentPrefix = ""
     private var pendingPrefixes: [PendingPrefix] = []
+    /// True while `completedText` ends with a period that Cadence or the model
+    /// supplied at a pause, as opposed to one the user spoke.
+    private var closedWithAutomaticPeriod = false
+    /// Whether the current segment continues the previous sentence. `nil`
+    /// until its first word is complete enough to judge.
+    private var segmentJoinsPrevious: Bool?
+    private var pendingDeleteBackward = 0
     let cleanupEnabled: Bool
     let dictionaryTerms: [String]
     let snippets: [TextSnippet]
     let insertionDelay: Duration
+    let style: WritingStyle
 
     init(
         cleanupEnabled: Bool = false,
         dictionaryTerms: [String] = [],
         snippets: [TextSnippet] = [],
-        insertionDelay: Duration = .zero
+        insertionDelay: Duration = .zero,
+        style: WritingStyle = .standard
     ) {
         self.cleanupEnabled = cleanupEnabled
         self.dictionaryTerms = dictionaryTerms
         self.snippets = snippets
         self.insertionDelay = insertionDelay
+        self.style = style
     }
 
     var transcript: String {
@@ -65,6 +80,7 @@ struct LiveTranscriptEmitter {
         _ rawPartial: String,
         at now: ContinuousClock.Instant = .now
     ) throws -> LiveTranscriptUpdate? {
+        resolveSegmentJoin(rawPartial, force: false)
         let formatted = format(rawPartial)
         let partial = formatted.text
         let partialChanged = partial != currentPartial
@@ -98,7 +114,8 @@ struct LiveTranscriptEmitter {
         return LiveTranscriptUpdate(
             transcript: transcript,
             insertion: insertion,
-            sentenceFinal: false
+            sentenceFinal: false,
+            deleteBackward: takePendingDeleteBackward(with: insertion)
         )
     }
 
@@ -107,6 +124,7 @@ struct LiveTranscriptEmitter {
     /// pause as language context and can decide whether punctuation belongs
     /// there. No visible text is revised.
     mutating func flushPauseTail(_ rawPartial: String) throws -> LiveTranscriptUpdate? {
+        resolveSegmentJoin(rawPartial, force: true)
         let partial = format(rawPartial).text
         guard !partial.isEmpty else { return nil }
         guard partial.hasPrefix(insertedCurrentPrefix) else {
@@ -127,12 +145,13 @@ struct LiveTranscriptEmitter {
         return LiveTranscriptUpdate(
             transcript: transcript,
             insertion: insertion,
-            sentenceFinal: false
+            sentenceFinal: false,
+            deleteBackward: takePendingDeleteBackward(with: insertion)
         )
     }
 
     func pauseBoundaryDecision(for rawPartial: String) -> PauseBoundaryDecision {
-        PauseBoundaryClassifier.classify(format(rawPartial).text)
+        PauseBoundaryClassifier.classify(format(rawPartial, dropCommas: false).text)
     }
 
     /// Flushes the frontier word at a real sentence boundary. Parakeet normally
@@ -143,11 +162,13 @@ struct LiveTranscriptEmitter {
         _ rawFinal: String,
         continuesAfterPause: Bool
     ) throws -> LiveTranscriptUpdate? {
+        resolveSegmentJoin(rawFinal, force: true)
         let formatted = format(rawFinal)
         let unpunctuated = formatted.text
         guard !unpunctuated.isEmpty else {
             currentPartial = ""
             insertedCurrentPrefix = ""
+            segmentJoinsPrevious = nil
             return nil
         }
         guard unpunctuated.hasPrefix(insertedCurrentPrefix) else {
@@ -157,9 +178,19 @@ struct LiveTranscriptEmitter {
             )
         }
 
-        let final = formatted.endsWithBareSnippet
-            ? unpunctuated
-            : Self.ensureSentencePunctuation(unpunctuated)
+        var final = unpunctuated
+        var automaticPeriod = false
+        if !formatted.endsWithBareSnippet {
+            // Question-tag detection needs the model's commas even when the
+            // casual tone drops them from the inserted text.
+            let reference = style.dropsModelCommas ? format(rawFinal, dropCommas: false).text : unpunctuated
+            final = Self.ensureSentencePunctuation(unpunctuated, questionTagReference: reference)
+            automaticPeriod = final.last == "." && !Self.endsWithSpokenTerminalCommand(rawFinal)
+            if !continuesAfterPause, automaticPeriod {
+                final = WritingStyleFormatter.closingDictation(final, style: style)
+                automaticPeriod = final.last == "."
+            }
+        }
         guard final.hasPrefix(insertedCurrentPrefix) else {
             throw LiveTranscriptError.revisedVisibleText(
                 previous: insertedCurrentPrefix,
@@ -169,15 +200,38 @@ struct LiveTranscriptEmitter {
 
         let rawDelta = String(final.dropFirst(insertedCurrentPrefix.count))
         let insertion = insertionDelta(rawDelta)
+        let deleteBackward = pendingDeleteBackward
+        pendingDeleteBackward = 0
         completedText = Self.join(completedText, final)
+        closedWithAutomaticPeriod = automaticPeriod
         currentPartial = ""
         insertedCurrentPrefix = ""
+        segmentJoinsPrevious = nil
         pendingPrefixes.removeAll(keepingCapacity: true)
 
         return LiveTranscriptUpdate(
             transcript: completedText,
             insertion: insertion,
-            sentenceFinal: continuesAfterPause
+            sentenceFinal: continuesAfterPause,
+            deleteBackward: deleteBackward
+        )
+    }
+
+    /// When the shortcut is released after a pause already closed the last
+    /// sentence, the casual and excited tones still get their closing mark:
+    /// the automatic period is retracted rather than left in the editor.
+    mutating func finishDictation() -> LiveTranscriptUpdate? {
+        guard !hasOpenSegment, closedWithAutomaticPeriod, completedText.last == ".",
+              style.changesClosingPeriod else { return nil }
+        completedText.removeLast()
+        closedWithAutomaticPeriod = false
+        let insertion = style.exclaimsFinalSentence ? "!" : ""
+        completedText += insertion
+        return LiveTranscriptUpdate(
+            transcript: completedText,
+            insertion: insertion,
+            sentenceFinal: false,
+            deleteBackward: 1
         )
     }
 
@@ -186,18 +240,83 @@ struct LiveTranscriptEmitter {
         currentPartial = ""
         insertedCurrentPrefix = ""
         pendingPrefixes.removeAll(keepingCapacity: true)
+        closedWithAutomaticPeriod = false
+        segmentJoinsPrevious = nil
+        pendingDeleteBackward = 0
     }
 
-    private func format(_ transcript: String) -> SnippetFormattingResult {
-        let cleaned = SpeechCleanupFormatter.format(transcript, enabled: cleanupEnabled)
-        let punctuated = SpokenPunctuationFormatter.format(cleaned)
+    /// Decides once per segment whether its words continue the sentence that
+    /// an automatic period closed. Two signals are trusted: the reset decoder
+    /// restarting in lowercase, which in practice only happens mid-sentence,
+    /// and a first word that cannot begin a sentence. A confirmed join removes
+    /// the period from the transcript and schedules its deletion.
+    private mutating func resolveSegmentJoin(_ rawPartial: String, force: Bool) {
+        guard segmentJoinsPrevious == nil, insertedCurrentPrefix.isEmpty else { return }
+        guard closedWithAutomaticPeriod, completedText.last == "." else {
+            segmentJoinsPrevious = false
+            return
+        }
+        let cleaned = SpeechCleanupFormatter.format(
+            rawPartial,
+            enabled: cleanupEnabled,
+            capitalizeLeadingWord: false
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = cleaned.split(whereSeparator: \.isWhitespace).first.map(String.init),
+              force || cleaned.contains(where: \.isWhitespace) else { return }
+
+        let word = first.trimmingCharacters(in: .punctuationCharacters)
+        guard let initial = word.first, initial.isLetter else {
+            segmentJoinsPrevious = false
+            return
+        }
+        let isMixedCase = word.dropFirst().contains(where: \.isUppercase)
+        let isDictionaryTerm = dictionaryTerms.contains {
+            $0.caseInsensitiveCompare(word) == .orderedSame
+        }
+        let lowercaseRestart = initial.isLowercase && !isMixedCase && !isDictionaryTerm
+        let joins = lowercaseRestart || Self.sentenceContinuationStarters.contains(word.lowercased())
+        segmentJoinsPrevious = joins
+        guard joins else { return }
+        completedText.removeLast()
+        closedWithAutomaticPeriod = false
+        pendingDeleteBackward = 1
+    }
+
+    private mutating func takePendingDeleteBackward(with insertion: String) -> Int {
+        guard !insertion.isEmpty else { return 0 }
+        let count = pendingDeleteBackward
+        pendingDeleteBackward = 0
+        return count
+    }
+
+    private func format(_ transcript: String, dropCommas: Bool? = nil) -> SnippetFormattingResult {
+        let joining = segmentJoinsPrevious == true
+        let cleaned = SpeechCleanupFormatter.format(
+            transcript,
+            enabled: cleanupEnabled,
+            capitalizeLeadingWord: !joining && !style.lowercasesSentenceStarts
+        )
+        let commaless = (dropCommas ?? style.dropsModelCommas)
+            ? WritingStyleFormatter.droppingCommas(cleaned)
+            : cleaned
+        let punctuated = SpokenPunctuationFormatter.format(commaless)
         let dictionaryCorrected = DictionaryTermFormatter.apply(to: punctuated, terms: dictionaryTerms)
-        let styled = SpokenStyleFormatter.format(dictionaryCorrected)
+        var styled = SpokenStyleFormatter.format(dictionaryCorrected)
             .trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-        let sentenceCased = Self.endsInSentenceMark(completedText)
-            ? Self.capitalizingSentenceStart(styled)
-            : styled
-        return SnippetFormatter.format(sentenceCased, snippets: snippets)
+        let startsSentence = Self.endsInSentenceMark(completedText)
+        if joining {
+            styled = WritingStyleFormatter.lowercasingFirstWord(styled, preserving: dictionaryTerms)
+        } else if startsSentence, !style.lowercasesSentenceStarts {
+            styled = Self.capitalizingSentenceStart(styled)
+        }
+        if style.lowercasesSentenceStarts {
+            styled = WritingStyleFormatter.lowercasingSentenceStarts(
+                styled,
+                preserving: dictionaryTerms,
+                includingFirstWord: !joining && (completedText.isEmpty || startsSentence)
+            )
+        }
+        return SnippetFormatter.format(styled, snippets: snippets)
     }
 
     private func insertionDelta(_ rawDelta: String) -> String {
@@ -274,7 +393,10 @@ struct LiveTranscriptEmitter {
         return String(transcript[..<boundary])
     }
 
-    static func ensureSentencePunctuation(_ text: String) -> String {
+    static func ensureSentencePunctuation(
+        _ text: String,
+        questionTagReference: String? = nil
+    ) -> String {
         let trailingBreakCount = text.reversed().prefix(while: { $0 == "\n" }).count
         let trailingBreaks = String(repeating: "\n", count: min(trailingBreakCount, 2))
         var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -287,7 +409,7 @@ struct LiveTranscriptEmitter {
             significant = result.index(before: significant)
         }
 
-        let shouldBeQuestion = hasQuestionTag(in: result, through: significant)
+        let shouldBeQuestion = hasQuestionTag(in: questionTagReference ?? String(result[...significant]))
         if sentenceMarks.contains(result[significant]) {
             if shouldBeQuestion, result[significant] == "." {
                 result.replaceSubrange(significant...significant, with: "?")
@@ -306,10 +428,17 @@ struct LiveTranscriptEmitter {
     /// A comma-delimited conversational tag is strong textual evidence of a
     /// question even when the recognizer falls back to a period. Requiring the
     /// delimiter keeps declarative uses such as “I will let you know” intact.
-    private static func hasQuestionTag(in text: String, through terminal: String.Index) -> Bool {
-        let candidate = String(text[...terminal])
+    private static func hasQuestionTag(in text: String) -> Bool {
+        let candidate = text.trimmingCharacters(in: CharacterSet(charactersIn: "\"'”’)]} \t\n"))
         return candidate.range(
             of: #"(?i)[,;—–][ \t]*(?:you[ \t]+know|right|correct|okay|ok)[.,!?;:]?$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static func endsWithSpokenTerminalCommand(_ rawText: String) -> Bool {
+        rawText.range(
+            of: #"(?i)\b(?:period|full[ \t-]+stop|question[ \t-]+mark|exclamation[ \t-]+(?:mark|point))\b[.,!?;:]?[ \t]*$"#,
             options: .regularExpression
         ) != nil
     }
@@ -357,4 +486,11 @@ struct LiveTranscriptEmitter {
 
     private static let sentenceMarks: Set<Character> = [".", "!", "?"]
     private static let softPunctuation: Set<Character> = [",", ";", ":"]
+
+    /// Words that do not begin an English sentence in dictated prose but
+    /// routinely follow a thinking pause mid-sentence.
+    private static let sentenceContinuationStarters: Set<String> = [
+        "especially", "etc", "like", "nor", "than", "unless", "until",
+        "versus", "whereas", "which", "whom", "whose"
+    ]
 }

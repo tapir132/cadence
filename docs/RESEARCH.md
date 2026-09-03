@@ -53,6 +53,18 @@ The personal dictionary runs at the same pre-insertion stage. Case- and diacriti
 
 The optional live cleanup distinguishes nonlexical vocal pauses from real discourse words. Standalone `um`, `uh`, `erm`, `er`, and `hmm` can be removed directly. `like`, `well`, and `you know` are removed only when punctuation makes them a detached parenthetical; `I like this`, `well designed`, and `do you know Liam?` are preserved. This context rule matters because broader revision would need to retract text that may already be visible.
 
+### Retracting a period the pause invented
+
+The classifier above prevents many false boundaries, but it can only see the words before the pause. Fifty-two local transcripts from this Mac (September 2, 2026) still contained splits such as `a bug right now. where the bottom bar`, `adding periods. especially when you pause`, `Apple dictation. was messing`, and `are both. characters in`. In every one of those cases the reset decoder had restarted in lowercase, and the earlier fix had then capitalized that word and kept the period. The lowercase restart is the model's own acoustic judgment that the new audio does not begin a sentence, made without any text context, and it was correct each time. Capitalized restarts were mixed: `keep typing. Until it's done` and `better. Than that` are continuations, while `The style tab` and `With a period` could begin a sentence, so only a short list of words that cannot open an English sentence is trusted there.
+
+Cadence therefore keeps one exception to its append-only rule. When the previous sentence ended with an automatic period (one Cadence invented or the model supplied at a pause, never one the person spoke) and the next segment's first word is a lowercase restart or a listed continuation word, the emitter removes that period from its transcript, lowercases the first word, and emits the delta with `deleteBackward: 1`. `KeystrokeInjector` runs that retraction in the same serialized queue as the paste, as a plain Delete key event with empty modifier flags so a still-held ⌥ never becomes ⌥-Delete. An accessible editor must expose the period immediately before a collapsed caret or the retraction is skipped and the words still arrive; an opaque editor receives the Delete on the same trust basis as a paste. Chromium content-editables that report a container-relative caret will skip the retraction rather than risk another character.
+
+The uncertain-boundary grace also grew from 512 ms to about 1.5 s. That window only applies when the model itself declined to punctuate after 750 ms of silence, so the sentence was already the model's best guess at “not finished”; releasing the shortcut still closes it immediately. This matches the streaming-punctuation literature, which finds that silence thresholds alone are poor sentence boundaries for dictation because people pause to think ([Streaming Punctuation for Long-form Dictation](https://arxiv.org/abs/2210.05756)), and that a boundary is best committed once the beginning of the next sentence is seen.
+
+### Per-app writing style
+
+Wispr Flow's [Flow Styles](https://docs.wisprflow.ai/articles/2368263928-how-to-setup-flow-styles) and [Personalized Style](https://wisprflow.ai/post/personalized-style) assign a tone to four app categories, detect web apps by URL, and state that the feature “doesn't change your grammar, word choice, or phrasing.” Very casual is offered for personal messages only; Excited for work, email, and other. Cadence implements the same contract locally as deterministic formatting rules in `WritingStyle`: category from the frontmost bundle identifier, with the focused tab title consulted only inside a browser; Casual removes recognizer commas before spoken-command conversion so a spoken “comma” survives, keeps commas inside numbers and at line ends, and drops the closing period in messengers; Very casual additionally lowercases plain sentence-initial words while preserving `I`, mixed-case words, and dictionary terms; Excited exchanges the closing period for an exclamation mark. Because the closing mark is only known when the shortcut is released, a pause that already closed the final sentence is corrected through the same single-character retraction path. Pause classification and question-tag detection still run on the comma-preserving text so the casual tone does not weaken boundary decisions.
+
 ### Structured end-of-dictation repairs
 
 The classic speech-repair structure is a reparandum (abandoned words), an optional interregnum/editing term, and a repair. The primary [Bear, Dowding, and Shriberg repair algorithm](https://arxiv.org/abs/cmp-lg/9406006) builds repair patterns from word matches, replacements, fragments, and editing terms rather than a fixed phrase template. Cadence adopts a conservative lexical subset: it finds two-or-more-word anchors repeated across optional `like`, `you know`, or `I mean` material, and it recognizes an editing-term restart only when the repair begins with an earlier multiword anchor. Single-word duplication such as `very very` and an ambiguous correction such as `Tuesday, I mean Wednesday` are preserved.
@@ -162,11 +174,13 @@ Parakeet Unified streaming decoder
       │ streaming partial hypothesis
       ▼
 LiveTranscriptEmitter
-      ├── format: cleanup → spoken commands → dictionary → written style → snippets
+      ├── format: cleanup → tone commas → spoken commands → dictionary → written style → tone case → snippets
       ├── preview: complete formatted partial, including frontier word
       ├── pause classifier: complete / continuation / uncertain
+      ├── join check: lowercase or continuation-word restart after an automatic period
       └── insertion: stable completed-word deltas and pause tail only
-               └── optional one-second prefix checkpoint
+               ├── optional one-second prefix checkpoint
+               └── deleteBackward: 1 when a period is retracted
                │
                ▼
 KeystrokeInjector (one serialized paste queue)
@@ -202,7 +216,8 @@ Snippet regressions cover exact whole-phrase matching, case and diacritics, inco
 - English first; the Unified checkpoint is English-only.
 - A one-time ASR/VAD model download and compilation is required before dictation becomes ready.
 - Words appear after a following boundary confirms they are complete, so preview text can lead editor text by roughly one word.
-- Tail words flush after approximately 750 ms of silence. Terminal punctuation can take up to roughly another 512 ms for an uncertain boundary; a clear dependent clause remains open for the next phrase or shortcut release.
+- Tail words flush after approximately 750 ms of silence. Terminal punctuation can take up to roughly another 1.5 s for an uncertain boundary; a clear dependent clause remains open for the next phrase or shortcut release. An automatic period can later be retracted by one Delete keystroke, and only that character is ever removed.
+- Writing styles are rule-based and English-only. App categories come from fixed bundle and tab-title tables; there is no per-user “add this app” list yet.
 - Live filler cleanup is conservative. Deeper editing can revise only an exactly verified dictation span and still does not interpret free-form commands such as “forget that.”
 - Snippets are exact plain-text macros. Rich formatting needs attributed-run provenance and multiple pasteboard representations before it can be promised consistently across editors.
 - Character playback and non-steady rhythm profiles are opt-in. Cadence deliberately does not learn or imitate a person's keystroke biometrics, inject fake mistakes, or promise that every editor will group per-character paste operations into the same undo history as physical typing.

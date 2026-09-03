@@ -34,3 +34,14 @@ import Testing
     #expect(emitter.pauseBoundaryDecision(for: "Finish this period") == .complete)
     #expect(emitter.pauseBoundaryDecision(for: "Is this right question mark") == .complete)
 }
+
+@Test func trailingPrepositionsAndNounSubjectCopulasStayOpen() {
+    #expect(PauseBoundaryClassifier.classify("Be able to do things like") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("A lot of") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("It's really") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("The whole point of the app is") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("The kids can") == .continuation)
+    #expect(PauseBoundaryClassifier.classify("Yes it is") == .uncertain)
+    #expect(PauseBoundaryClassifier.classify("Do what you like") == .uncertain)
+    #expect(PauseBoundaryClassifier.classify("I think that was it") == .uncertain)
+}
