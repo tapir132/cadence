@@ -236,8 +236,13 @@ import Testing
     #expect(!normal.delivery.characterPlaybackEnabled)
     #expect(essay.delivery.characterPlaybackEnabled)
 
+    #expect(quick.cleanup == .none)
+    #expect(normal.cleanup == .light)
+    #expect(essay.cleanup == .medium)
+
     let personalizedEssay = DictationConfiguration(
         recognitionProfile: essay.recognitionProfile,
+        cleanup: essay.cleanup,
         delivery: TranscriptDeliveryPreferences(
             typingBufferEnabled: essay.delivery.typingBufferEnabled,
             characterPlaybackEnabled: essay.delivery.characterPlaybackEnabled,
@@ -249,6 +254,7 @@ import Testing
 
     let custom = DictationConfiguration(
         recognitionProfile: .accurate,
+        cleanup: .medium,
         delivery: TranscriptDeliveryPreferences(
             typingBufferEnabled: false,
             characterPlaybackEnabled: true,
@@ -257,6 +263,13 @@ import Testing
         )
     )
     #expect(DictationProfile.matching(custom) == .custom)
+
+    let normalWithoutCleanup = DictationConfiguration(
+        recognitionProfile: normal.recognitionProfile,
+        cleanup: .none,
+        delivery: normal.delivery
+    )
+    #expect(DictationProfile.matching(normalWithoutCleanup) == .custom)
 }
 
 @Test func legacyTimingVariationMigratesToNaturalRhythm() throws {

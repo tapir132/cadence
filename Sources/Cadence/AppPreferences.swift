@@ -85,6 +85,7 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
 
 struct DictationConfiguration: Equatable, Sendable {
     let recognitionProfile: RecognitionProfile
+    let cleanup: AutoCleanupLevel
     let delivery: TranscriptDeliveryPreferences
 }
 
@@ -111,11 +112,11 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
     var detail: String {
         switch self {
         case .quick:
-            "For short replies, commands, and forms. Inserts completed chunks immediately, with no pacing delay."
+            "For short replies, commands, and forms. Inserts completed chunks immediately, with no cleanup or pacing delay."
         case .normal:
-            "For messages, notes, and everyday dictation. Waits briefly for stable words, then inserts complete chunks."
+            "For messages, notes, and everyday dictation. Light cleanup removes fillers, and words wait briefly to stabilize before complete chunks are inserted."
         case .essay:
-            "For long-form writing. Uses more speech context and character-paced delivery that finishes after you release the shortcut."
+            "For long-form writing. Uses more speech context, Medium cleanup with Deeper editing, and character-paced delivery that finishes after you release the shortcut."
         case .custom:
             "Your Advanced settings do not match a built-in profile."
         }
@@ -126,6 +127,7 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
         case .quick:
             DictationConfiguration(
                 recognitionProfile: .fast,
+                cleanup: .none,
                 delivery: TranscriptDeliveryPreferences(
                     typingBufferEnabled: false,
                     characterPlaybackEnabled: false,
@@ -136,6 +138,7 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
         case .normal:
             DictationConfiguration(
                 recognitionProfile: .fast,
+                cleanup: .light,
                 delivery: TranscriptDeliveryPreferences(
                     typingBufferEnabled: true,
                     characterPlaybackEnabled: false,
@@ -146,6 +149,7 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
         case .essay:
             DictationConfiguration(
                 recognitionProfile: .accurate,
+                cleanup: .medium,
                 delivery: TranscriptDeliveryPreferences(
                     typingBufferEnabled: true,
                     characterPlaybackEnabled: true,
@@ -171,15 +175,17 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
             // the chunked Quick and Normal profiles and should never make a
             // recognizable profile appear as Custom.
             return preset.recognitionProfile == configuration.recognitionProfile
+                && preset.cleanup == configuration.cleanup
                 && expected.typingBufferEnabled == actual.typingBufferEnabled
                 && expected.characterPlaybackEnabled == actual.characterPlaybackEnabled
         } ?? .custom
     }
 }
 
-/// The single cleanup control, chosen in Style. It applies to every app and
-/// every dictation profile, so Quick, Normal, and Essay never change it. The
-/// two underlying behaviors keep their original preference keys.
+/// The single cleanup control. Light is the pre-insertion filler-word cleanup
+/// and Medium adds Deeper editing after the shortcut is released; both keep
+/// their original preference keys. Quick, Normal, and Essay set None, Light,
+/// and Medium, and changing the level under Advanced makes the profile Custom.
 enum AutoCleanupLevel: String, CaseIterable, Identifiable, Sendable {
     case none
     case light
@@ -197,20 +203,12 @@ enum AutoCleanupLevel: String, CaseIterable, Identifiable, Sendable {
 
     var detail: String {
         switch self {
-        case .none: "Types exactly what you said, including vocal pauses and restarts"
-        case .light: "Removes vocal pauses and detached asides before words appear"
-        case .medium: "Also repairs clear restarts and false sentence breaks after you finish"
-        }
-    }
-
-    var sample: String {
-        switch self {
         case .none:
-            "So there needs to be, um, there needs to be a setting for this. Because my Apple dictation. Was messing that up."
+            "Types exactly what you said, including vocal pauses and restarts."
         case .light:
-            "So there needs to be there needs to be a setting for this. Because my Apple dictation. Was messing that up."
+            "Filler-word cleanup: removes vocal pauses and punctuation-delimited asides such as “you know” before words appear. Context protects real uses such as “I like this.”"
         case .medium:
-            "So there needs to be a setting for this. Because my Apple dictation was messing that up."
+            "Filler-word cleanup plus Deeper editing: after you finish, repeated-word anchors, editing terms, and sentence grammar repair clear restarts and false sentence breaks in the verified dictation span."
         }
     }
 

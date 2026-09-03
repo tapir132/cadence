@@ -1,29 +1,8 @@
 import SwiftUI
 
-private enum StylePage: Hashable, Identifiable {
-    case context(WritingContext)
-    case cleanup
-
-    var id: String {
-        switch self {
-        case let .context(context): context.rawValue
-        case .cleanup: "cleanup"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case let .context(context): context.title
-        case .cleanup: "Auto cleanup"
-        }
-    }
-
-    static let all: [StylePage] = WritingContext.allCases.map(StylePage.context) + [.cleanup]
-}
-
 struct StyleView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var page: StylePage = .context(.personalMessages)
+    @State private var context: WritingContext = .personalMessages
 
     var body: some View {
         ScrollView {
@@ -42,32 +21,17 @@ struct StyleView: View {
 
                 tabs.padding(.top, 30)
 
-                switch page {
-                case let .context(context):
-                    banner(
-                        title: context.banner,
-                        detail: "Style formatting applies to English dictation.",
-                        trailing: context.exampleApps
-                    )
-                    HStack(alignment: .top, spacing: 14) {
-                        ForEach(context.tones) { tone in
-                            toneCard(tone, context: context)
-                        }
+                banner(
+                    title: context.banner,
+                    detail: "Style formatting applies to English dictation. Auto cleanup lives in Settings.",
+                    trailing: context.exampleApps
+                )
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(context.tones) { tone in
+                        toneCard(tone, context: context)
                     }
-                    .padding(.top, 18)
-                case .cleanup:
-                    banner(
-                        title: "Auto cleanup applies to all your dictations",
-                        detail: "One setting for how much Cadence tidies, in every app and every dictation profile. Your original words are still saved in the Home transcript history.",
-                        trailing: nil
-                    )
-                    HStack(alignment: .top, spacing: 14) {
-                        ForEach(AutoCleanupLevel.allCases) { level in
-                            cleanupCard(level)
-                        }
-                    }
-                    .padding(.top, 18)
                 }
+                .padding(.top, 18)
             }
             .padding(42)
             .frame(maxWidth: 860, alignment: .leading)
@@ -78,23 +42,16 @@ struct StyleView: View {
     private var tabs: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 22) {
-                ForEach(StylePage.all) { candidate in
+                ForEach(WritingContext.allCases) { candidate in
                     Button {
-                        withAnimation(.easeOut(duration: 0.15)) { page = candidate }
+                        withAnimation(.easeOut(duration: 0.15)) { context = candidate }
                     } label: {
                         VStack(spacing: 8) {
-                            HStack(spacing: 6) {
-                                Text(candidate.title)
-                                    .font(.system(size: 13, weight: page == candidate ? .semibold : .medium))
-                                if candidate == .cleanup {
-                                    Text("BETA")
-                                        .font(.system(size: 8, weight: .bold)).tracking(0.8)
-                                        .foregroundStyle(CadenceTheme.muted)
-                                }
-                            }
-                            .foregroundStyle(page == candidate ? CadenceTheme.ink : CadenceTheme.muted)
+                            Text(candidate.title)
+                                .font(.system(size: 13, weight: context == candidate ? .semibold : .medium))
+                                .foregroundStyle(context == candidate ? CadenceTheme.ink : CadenceTheme.muted)
                             Rectangle()
-                                .fill(page == candidate ? CadenceTheme.ink : .clear)
+                                .fill(context == candidate ? CadenceTheme.ink : .clear)
                                 .frame(height: 2)
                         }
                         .contentShape(Rectangle())
@@ -168,43 +125,6 @@ struct StyleView: View {
         .buttonStyle(.plain)
         .modifier(SelectableCard(selected: selected))
         .accessibilityLabel("\(tone.title) \(tone.subtitle)")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func cleanupCard(_ level: AutoCleanupLevel) -> some View {
-        let selected = model.autoCleanupLevel == level
-        return Button {
-            model.autoCleanupLevel = level
-        } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(level.title)
-                    .font(.system(size: 24, weight: .medium, design: .serif))
-                    .tracking(-0.6)
-                Text(level.detail)
-                    .font(.system(size: 12))
-                    .foregroundStyle(CadenceTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 6)
-                Spacer(minLength: 26)
-                Text(level.sample)
-                    .font(.system(size: 12, design: .serif))
-                    .italic()
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(CadenceTheme.paperDeep.opacity(0.7))
-                    )
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, minHeight: 250, alignment: .topLeading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .modifier(SelectableCard(selected: selected))
-        .accessibilityLabel("\(level.title) cleanup")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

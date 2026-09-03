@@ -63,8 +63,6 @@ struct SettingsView: View {
                     line
                     recognitionSettingsPageRow
                     line
-                    autoCleanupRow
-                    line
                     if recognitionSettingsPage == .profiles {
                         dictationProfileRow
                         if model.dictationProfile == .essay {
@@ -75,6 +73,8 @@ struct SettingsView: View {
                         }
                     } else {
                         recognitionProfileRow
+                        line
+                        autoCleanupRow
                         line
                         typingBufferRow
                         line
@@ -422,21 +422,35 @@ struct SettingsView: View {
     }
 
     private var autoCleanupRow: some View {
-        HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Auto cleanup · \(model.autoCleanupLevel.title)")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("\(model.autoCleanupLevel.detail). One setting for every profile and app; choose the level in Style.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(CadenceTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 18) {
+                HStack(spacing: 7) {
+                    Text("Auto cleanup").font(.system(size: 13, weight: .semibold))
+                    Text("BETA")
+                        .font(.system(size: 8, weight: .bold))
+                        .tracking(0.8)
+                        .foregroundStyle(CadenceTheme.muted)
+                }
+                Spacer(minLength: 18)
+                Picker("Auto cleanup", selection: $model.autoCleanupLevel) {
+                    ForEach(AutoCleanupLevel.allCases) { level in
+                        Text(level.title).tag(level)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 210)
+                .accessibilityLabel("Auto cleanup")
             }
-            Spacer(minLength: 18)
-            Button("Open Style") {
-                withAnimation(.easeOut(duration: 0.18)) { model.selectedSection = .style }
-            }
-            .buttonStyle(.bordered)
+            Text(model.autoCleanupLevel.detail)
+                .font(.system(size: 11))
+                .foregroundStyle(CadenceTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Your original words stay in the Home transcript history.")
+                .font(.system(size: 11))
+                .foregroundStyle(CadenceTheme.muted)
         }
+        .disabled(model.isListening)
         .padding(16)
     }
 

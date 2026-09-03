@@ -177,11 +177,4 @@ import Testing
     #expect(AutoCleanupLevel.medium.speechCleanupEnabled && AutoCleanupLevel.medium.deepEditingEnabled)
     #expect(!AutoCleanupLevel.none.speechCleanupEnabled)
     #expect(AutoCleanupLevel(speechCleanupEnabled: false, deepEditingEnabled: true) == .medium)
-    #expect(
-        DeepSpeechCleanupFormatter.format(
-            SpeechCleanupFormatter.format(AutoCleanupLevel.none.sample, enabled: true),
-            enabled: true
-        ) == AutoCleanupLevel.medium.sample
-    )
-    #expect(SpeechCleanupFormatter.format(AutoCleanupLevel.none.sample, enabled: true) == AutoCleanupLevel.light.sample)
 }

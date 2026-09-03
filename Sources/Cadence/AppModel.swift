@@ -64,7 +64,6 @@ final class AppModel: ObservableObject {
             Task { [weak self] in await self?.prepareSpeechModel() }
         }
     }
-    /// Independent of Quick, Normal, and Essay, like the listening options.
     @Published var autoCleanupLevel: AutoCleanupLevel = .none { didSet { saveSettings() } }
     @Published var typingBufferEnabled = false { didSet { saveSettings() } }
     @Published var characterPlaybackEnabled = false { didSet { saveSettings() } }
@@ -569,6 +568,7 @@ final class AppModel: ObservableObject {
 
         isApplyingDictationProfile = true
         recognitionProfile = configuration.recognitionProfile
+        autoCleanupLevel = configuration.cleanup
         typingBufferEnabled = delivery.typingBufferEnabled
         characterPlaybackEnabled = delivery.characterPlaybackEnabled
         characterPlaybackWordsPerMinute = delivery.characterPlaybackWordsPerMinute
@@ -620,6 +620,7 @@ final class AppModel: ObservableObject {
     private var currentDictationConfiguration: DictationConfiguration {
         DictationConfiguration(
             recognitionProfile: recognitionProfile,
+            cleanup: autoCleanupLevel,
             delivery: TranscriptDeliveryPreferences(
                 typingBufferEnabled: typingBufferEnabled,
                 characterPlaybackEnabled: characterPlaybackEnabled,
