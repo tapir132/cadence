@@ -58,7 +58,7 @@ struct StyleView: View {
                 case .cleanup:
                     banner(
                         title: "Auto cleanup applies to all your dictations",
-                        detail: "Choose how much Cadence tidies every time, across all apps. This is the same setting the Quick, Normal, and Essay profiles use, so changing it here can switch the profile to Custom.",
+                        detail: "One setting for how much Cadence tidies, in every app and every dictation profile. Your original words are still saved in the Home transcript history.",
                         trailing: nil
                     )
                     HStack(alignment: .top, spacing: 14) {

@@ -154,6 +154,22 @@ import Testing
     #expect(spoken.finishDictation() == nil)
 }
 
+@Test func autoCleanupLevelPersistsThroughTheOriginalPreferenceKeys() throws {
+    let suiteName = "app.cadence.tests.cleanup.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    #expect(AutoCleanupLevel.load(from: defaults) == .none)
+    // A person who had Essay's two switches on before the single control
+    // existed lands on Medium without any migration step.
+    defaults.set(true, forKey: "speechCleanupEnabled")
+    defaults.set(true, forKey: "deepEditingEnabled")
+    #expect(AutoCleanupLevel.load(from: defaults) == .medium)
+    AutoCleanupLevel.light.save(to: defaults)
+    #expect(AutoCleanupLevel.load(from: defaults) == .light)
+    #expect(!defaults.bool(forKey: "deepEditingEnabled"))
+}
+
 @Test func autoCleanupLevelMirrorsTheTwoCleanupSwitches() {
     #expect(AutoCleanupLevel(speechCleanupEnabled: false, deepEditingEnabled: false) == .none)
     #expect(AutoCleanupLevel(speechCleanupEnabled: true, deepEditingEnabled: false) == .light)

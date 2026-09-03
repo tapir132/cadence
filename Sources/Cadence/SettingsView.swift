@@ -63,6 +63,8 @@ struct SettingsView: View {
                     line
                     recognitionSettingsPageRow
                     line
+                    autoCleanupRow
+                    line
                     if recognitionSettingsPage == .profiles {
                         dictationProfileRow
                         if model.dictationProfile == .essay {
@@ -73,10 +75,6 @@ struct SettingsView: View {
                         }
                     } else {
                         recognitionProfileRow
-                        line
-                        speechCleanupRow
-                        line
-                        deepEditingRow
                         line
                         typingBufferRow
                         line
@@ -423,6 +421,25 @@ struct SettingsView: View {
         )
     }
 
+    private var autoCleanupRow: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Auto cleanup · \(model.autoCleanupLevel.title)")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("\(model.autoCleanupLevel.detail). One setting for every profile and app; choose the level in Style.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 18)
+            Button("Open Style") {
+                withAnimation(.easeOut(duration: 0.18)) { model.selectedSection = .style }
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(16)
+    }
+
     private var pauseMusicRow: some View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
@@ -518,31 +535,6 @@ struct SettingsView: View {
         }
     }
 
-    private var speechCleanupRow: some View {
-        HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text("Filler-word cleanup").font(.system(size: 13, weight: .semibold))
-                    Text("BETA")
-                        .font(.system(size: 8, weight: .bold))
-                        .tracking(0.8)
-                        .foregroundStyle(CadenceTheme.muted)
-                }
-                Text("Removes vocal pauses and punctuation-delimited asides such as “you know.” Context protects real uses such as “I like this.”")
-                    .font(.system(size: 11))
-                    .foregroundStyle(CadenceTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 18)
-            Toggle("Filler-word cleanup", isOn: $model.speechCleanupEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .accessibilityLabel("Filler-word cleanup")
-        }
-        .disabled(model.isListening)
-        .padding(16)
-    }
-
     private var typingBufferRow: some View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
@@ -557,31 +549,6 @@ struct SettingsView: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .accessibilityLabel("One-second stability buffer")
-        }
-        .disabled(model.isListening)
-        .padding(16)
-    }
-
-    private var deepEditingRow: some View {
-        HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text("Deeper editing").font(.system(size: 13, weight: .semibold))
-                    Text("BETA")
-                        .font(.system(size: 8, weight: .bold))
-                        .tracking(0.8)
-                        .foregroundStyle(CadenceTheme.muted)
-                }
-                Text("After you finish, uses repeated-word anchors, editing terms, and sentence grammar to repair clear restarts and false boundaries. It changes only a verified dictation span.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(CadenceTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 18)
-            Toggle("Deeper editing", isOn: $model.deepEditingEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .accessibilityLabel("Deeper editing")
         }
         .disabled(model.isListening)
         .padding(16)

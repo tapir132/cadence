@@ -25,31 +25,23 @@ enum RecognitionProfile: String, CaseIterable, Codable, Hashable, Identifiable, 
 
 struct TranscriptDeliveryPreferences: Equatable, Sendable {
     static let defaults = TranscriptDeliveryPreferences(
-        speechCleanupEnabled: false,
-        deepEditingEnabled: false,
         typingBufferEnabled: false,
         characterPlaybackEnabled: false,
         characterPlaybackWordsPerMinute: CharacterPlaybackPacing.defaultWordsPerMinute,
         characterPlaybackRhythm: .steady
     )
 
-    let speechCleanupEnabled: Bool
-    let deepEditingEnabled: Bool
     let typingBufferEnabled: Bool
     let characterPlaybackEnabled: Bool
     let characterPlaybackWordsPerMinute: Double
     let characterPlaybackRhythm: CharacterPlaybackRhythm
 
     init(
-        speechCleanupEnabled: Bool,
-        deepEditingEnabled: Bool,
         typingBufferEnabled: Bool,
         characterPlaybackEnabled: Bool,
         characterPlaybackWordsPerMinute: Double,
         characterPlaybackRhythm: CharacterPlaybackRhythm
     ) {
-        self.speechCleanupEnabled = speechCleanupEnabled
-        self.deepEditingEnabled = deepEditingEnabled
         self.typingBufferEnabled = typingBufferEnabled
         self.characterPlaybackEnabled = characterPlaybackEnabled
         self.characterPlaybackWordsPerMinute = CharacterPlaybackPacing(
@@ -65,8 +57,6 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
                 ? .natural
                 : .steady)
         return TranscriptDeliveryPreferences(
-            speechCleanupEnabled: defaults.bool(forKey: "speechCleanupEnabled"),
-            deepEditingEnabled: defaults.bool(forKey: "deepEditingEnabled"),
             typingBufferEnabled: defaults.bool(forKey: "typingBufferEnabled"),
             characterPlaybackEnabled: defaults.bool(forKey: "characterPlaybackEnabled"),
             characterPlaybackWordsPerMinute: defaults.object(
@@ -77,8 +67,6 @@ struct TranscriptDeliveryPreferences: Equatable, Sendable {
     }
 
     func save(to defaults: UserDefaults) {
-        defaults.set(speechCleanupEnabled, forKey: "speechCleanupEnabled")
-        defaults.set(deepEditingEnabled, forKey: "deepEditingEnabled")
         defaults.set(typingBufferEnabled, forKey: "typingBufferEnabled")
         defaults.set(characterPlaybackEnabled, forKey: "characterPlaybackEnabled")
         defaults.set(
@@ -123,11 +111,11 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
     var detail: String {
         switch self {
         case .quick:
-            "For short replies, commands, and forms. Inserts completed chunks immediately, with no extra cleanup or pacing delay."
+            "For short replies, commands, and forms. Inserts completed chunks immediately, with no pacing delay."
         case .normal:
-            "For messages, notes, and everyday dictation. Cleans clear fillers and waits briefly for stable words, then inserts complete chunks."
+            "For messages, notes, and everyday dictation. Waits briefly for stable words, then inserts complete chunks."
         case .essay:
-            "For long-form writing. Uses more speech context, deeper end editing, and character-paced delivery that finishes after you release the shortcut."
+            "For long-form writing. Uses more speech context and character-paced delivery that finishes after you release the shortcut."
         case .custom:
             "Your Advanced settings do not match a built-in profile."
         }
@@ -139,8 +127,6 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
             DictationConfiguration(
                 recognitionProfile: .fast,
                 delivery: TranscriptDeliveryPreferences(
-                    speechCleanupEnabled: false,
-                    deepEditingEnabled: false,
                     typingBufferEnabled: false,
                     characterPlaybackEnabled: false,
                     characterPlaybackWordsPerMinute: 120,
@@ -151,8 +137,6 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
             DictationConfiguration(
                 recognitionProfile: .fast,
                 delivery: TranscriptDeliveryPreferences(
-                    speechCleanupEnabled: true,
-                    deepEditingEnabled: false,
                     typingBufferEnabled: true,
                     characterPlaybackEnabled: false,
                     characterPlaybackWordsPerMinute: 120,
@@ -163,8 +147,6 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
             DictationConfiguration(
                 recognitionProfile: .accurate,
                 delivery: TranscriptDeliveryPreferences(
-                    speechCleanupEnabled: true,
-                    deepEditingEnabled: true,
                     typingBufferEnabled: true,
                     characterPlaybackEnabled: true,
                     characterPlaybackWordsPerMinute: 100,
@@ -189,16 +171,15 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
             // the chunked Quick and Normal profiles and should never make a
             // recognizable profile appear as Custom.
             return preset.recognitionProfile == configuration.recognitionProfile
-                && expected.speechCleanupEnabled == actual.speechCleanupEnabled
-                && expected.deepEditingEnabled == actual.deepEditingEnabled
                 && expected.typingBufferEnabled == actual.typingBufferEnabled
                 && expected.characterPlaybackEnabled == actual.characterPlaybackEnabled
         } ?? .custom
     }
 }
 
-/// A three-step view over the two cleanup switches. Quick, Normal, and Essay
-/// map onto None, Light, and Medium, so this never conflicts with a profile.
+/// The single cleanup control, chosen in Style. It applies to every app and
+/// every dictation profile, so Quick, Normal, and Essay never change it. The
+/// two underlying behaviors keep their original preference keys.
 enum AutoCleanupLevel: String, CaseIterable, Identifiable, Sendable {
     case none
     case light
@@ -239,6 +220,18 @@ enum AutoCleanupLevel: String, CaseIterable, Identifiable, Sendable {
 
     var speechCleanupEnabled: Bool { self != .none }
     var deepEditingEnabled: Bool { self == .medium }
+
+    static func load(from defaults: UserDefaults) -> AutoCleanupLevel {
+        AutoCleanupLevel(
+            speechCleanupEnabled: defaults.bool(forKey: "speechCleanupEnabled"),
+            deepEditingEnabled: defaults.bool(forKey: "deepEditingEnabled")
+        )
+    }
+
+    func save(to defaults: UserDefaults) {
+        defaults.set(speechCleanupEnabled, forKey: "speechCleanupEnabled")
+        defaults.set(deepEditingEnabled, forKey: "deepEditingEnabled")
+    }
 }
 
 enum BarPlacement: String, CaseIterable, Codable, Identifiable {

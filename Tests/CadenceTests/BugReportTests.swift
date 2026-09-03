@@ -14,6 +14,7 @@ import Testing
         settings: .init(
             dictationProfile: "normal",
             recognitionProfile: "fast",
+            autoCleanup: "light",
             fillerWordCleanup: true,
             deeperEditing: false,
             stabilityBuffer: true,

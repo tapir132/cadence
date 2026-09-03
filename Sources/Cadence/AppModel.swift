@@ -64,8 +64,8 @@ final class AppModel: ObservableObject {
             Task { [weak self] in await self?.prepareSpeechModel() }
         }
     }
-    @Published var speechCleanupEnabled = false { didSet { saveSettings() } }
-    @Published var deepEditingEnabled = false { didSet { saveSettings() } }
+    /// Independent of Quick, Normal, and Essay, like the listening options.
+    @Published var autoCleanupLevel: AutoCleanupLevel = .none { didSet { saveSettings() } }
     @Published var typingBufferEnabled = false { didSet { saveSettings() } }
     @Published var characterPlaybackEnabled = false { didSet { saveSettings() } }
     @Published var characterPlaybackWordsPerMinute = CharacterPlaybackPacing.defaultWordsPerMinute {
@@ -108,18 +108,6 @@ final class AppModel: ObservableObject {
     var dictationProfile: DictationProfile {
         DictationProfile.matching(currentDictationConfiguration)
     }
-    var autoCleanupLevel: AutoCleanupLevel {
-        get {
-            AutoCleanupLevel(
-                speechCleanupEnabled: speechCleanupEnabled,
-                deepEditingEnabled: deepEditingEnabled
-            )
-        }
-        set {
-            speechCleanupEnabled = newValue.speechCleanupEnabled
-            deepEditingEnabled = newValue.deepEditingEnabled
-        }
-    }
 
     private init() {
         records = Self.loadRecords()
@@ -138,8 +126,7 @@ final class AppModel: ObservableObject {
             recognitionProfile = saved
         }
         let deliveryPreferences = TranscriptDeliveryPreferences.load(from: .standard)
-        speechCleanupEnabled = deliveryPreferences.speechCleanupEnabled
-        deepEditingEnabled = deliveryPreferences.deepEditingEnabled
+        autoCleanupLevel = AutoCleanupLevel.load(from: .standard)
         typingBufferEnabled = deliveryPreferences.typingBufferEnabled
         characterPlaybackEnabled = deliveryPreferences.characterPlaybackEnabled
         characterPlaybackWordsPerMinute = deliveryPreferences.characterPlaybackWordsPerMinute
@@ -259,7 +246,7 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in self?.audioLevel = level }
             }
             transcriptionTask?.cancel()
-            let cleanupEnabled = speechCleanupEnabled
+            let cleanupEnabled = autoCleanupLevel.speechCleanupEnabled
             let dictionaryTerms = dictionary
             let snippetSnapshot = snippets
             let insertionDelay: Duration = typingBufferEnabled ? .seconds(1) : .zero
@@ -521,8 +508,9 @@ final class AppModel: ObservableObject {
             settings: .init(
                 dictationProfile: dictationProfile.rawValue,
                 recognitionProfile: recognitionProfile.rawValue,
-                fillerWordCleanup: speechCleanupEnabled,
-                deeperEditing: deepEditingEnabled,
+                autoCleanup: autoCleanupLevel.rawValue,
+                fillerWordCleanup: autoCleanupLevel.speechCleanupEnabled,
+                deeperEditing: autoCleanupLevel.deepEditingEnabled,
                 stabilityBuffer: typingBufferEnabled,
                 characterPlayback: characterPlaybackEnabled,
                 characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
@@ -581,8 +569,6 @@ final class AppModel: ObservableObject {
 
         isApplyingDictationProfile = true
         recognitionProfile = configuration.recognitionProfile
-        speechCleanupEnabled = delivery.speechCleanupEnabled
-        deepEditingEnabled = delivery.deepEditingEnabled
         typingBufferEnabled = delivery.typingBufferEnabled
         characterPlaybackEnabled = delivery.characterPlaybackEnabled
         characterPlaybackWordsPerMinute = delivery.characterPlaybackWordsPerMinute
@@ -607,9 +593,8 @@ final class AppModel: ObservableObject {
             forKey: "pauseMusicDuringDictation"
         )
         writingStyles.save(to: .standard)
+        autoCleanupLevel.save(to: .standard)
         TranscriptDeliveryPreferences(
-            speechCleanupEnabled: speechCleanupEnabled,
-            deepEditingEnabled: deepEditingEnabled,
             typingBufferEnabled: typingBufferEnabled,
             characterPlaybackEnabled: characterPlaybackEnabled,
             characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
@@ -636,8 +621,6 @@ final class AppModel: ObservableObject {
         DictationConfiguration(
             recognitionProfile: recognitionProfile,
             delivery: TranscriptDeliveryPreferences(
-                speechCleanupEnabled: speechCleanupEnabled,
-                deepEditingEnabled: deepEditingEnabled,
                 typingBufferEnabled: typingBufferEnabled,
                 characterPlaybackEnabled: characterPlaybackEnabled,
                 characterPlaybackWordsPerMinute: characterPlaybackWordsPerMinute,
@@ -695,7 +678,7 @@ final class AppModel: ObservableObject {
         let finalText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = insertionSnapshot
         let completedTargetAppName = targetAppName
-        let shouldDeepEdit = deepEditingEnabled
+        let shouldDeepEdit = autoCleanupLevel.deepEditingEnabled
         insertionSnapshot = nil
         let duration = max(Date().timeIntervalSince(startedAt ?? Date()), 1)
         let insertedText = committedText

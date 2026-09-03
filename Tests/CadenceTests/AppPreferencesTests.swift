@@ -195,8 +195,6 @@ import Testing
     #expect(TranscriptDeliveryPreferences.load(from: defaults) == .defaults)
 
     let expected = TranscriptDeliveryPreferences(
-        speechCleanupEnabled: true,
-        deepEditingEnabled: true,
         typingBufferEnabled: true,
         characterPlaybackEnabled: true,
         characterPlaybackWordsPerMinute: 95,
@@ -237,13 +235,10 @@ import Testing
     #expect(!quick.delivery.characterPlaybackEnabled)
     #expect(!normal.delivery.characterPlaybackEnabled)
     #expect(essay.delivery.characterPlaybackEnabled)
-    #expect(essay.delivery.deepEditingEnabled)
 
     let personalizedEssay = DictationConfiguration(
         recognitionProfile: essay.recognitionProfile,
         delivery: TranscriptDeliveryPreferences(
-            speechCleanupEnabled: essay.delivery.speechCleanupEnabled,
-            deepEditingEnabled: essay.delivery.deepEditingEnabled,
             typingBufferEnabled: essay.delivery.typingBufferEnabled,
             characterPlaybackEnabled: essay.delivery.characterPlaybackEnabled,
             characterPlaybackWordsPerMinute: 145,
@@ -255,8 +250,6 @@ import Testing
     let custom = DictationConfiguration(
         recognitionProfile: .accurate,
         delivery: TranscriptDeliveryPreferences(
-            speechCleanupEnabled: false,
-            deepEditingEnabled: true,
             typingBufferEnabled: false,
             characterPlaybackEnabled: true,
             characterPlaybackWordsPerMinute: 135,

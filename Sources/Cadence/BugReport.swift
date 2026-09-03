@@ -39,6 +39,7 @@ struct CadenceBugReport: Codable, Equatable {
 
         let dictationProfile: String
         let recognitionProfile: String
+        let autoCleanup: String
         let fillerWordCleanup: Bool
         let deeperEditing: Bool
         let stabilityBuffer: Bool
