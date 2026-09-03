@@ -39,7 +39,7 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 
 The optional Pause music setting asks for macOS Automation access only when it first needs to control a running Music or Spotify app.
 
-The current release build is optimized for Apple Silicon. On first launch Cadence downloads and prepares the English speech and voice-activity models (roughly 600 MB total); later transcription runs locally without sending microphone audio to a speech service. Selecting Accurate downloads one additional local encoder the first time it is used. Cadence keeps both encoders warm after that first preparation, so later Fast/Accurate switches do not reload a 565 MB model.
+The current release build is optimized for Apple Silicon. On first launch Cadence downloads both Fast and Accurate English encoders plus the voice-activity model (roughly 1.2 GB total); later transcription runs locally without sending microphone audio to a speech service. The files live in `~/Library/Application Support/FluidAudio/Models`, outside `Cadence.app`, so Sparkle updates reuse them instead of downloading them again. Cadence still has to load the selected encoder from disk into Core ML after each launch; Settings labels that separately from a real download. After both profiles have been loaded during one run, later Fast/Accurate switches keep using the warm managers.
 
 ## Build and run
 
@@ -108,7 +108,7 @@ The application and focused window captured at recording start are checked again
 - Update archives and the update feed are verified with Ed25519 signatures before installation.
 - The private update-signing key is not stored in this repository.
 
-The speech model files are downloaded from the public model host on first use. Dictation is currently English-only.
+The speech model files are downloaded from the public model host during first-time setup and kept in the user's Application Support directory across app updates. Dictation is currently English-only.
 
 Please report security issues through the repository's private security advisory feature. See [SECURITY.md](SECURITY.md).
 

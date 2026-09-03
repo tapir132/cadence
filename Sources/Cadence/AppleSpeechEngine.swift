@@ -28,6 +28,24 @@ enum SpeechModelStatus: Equatable {
     case failed(String)
 }
 
+enum SpeechModelPreparationPhase: String, Equatable, Sendable {
+    case downloading
+    case loading
+}
+
+struct SpeechModelPreparationUpdate: Equatable, Sendable {
+    let phase: SpeechModelPreparationPhase
+    let progress: Double?
+
+    static func downloading(_ progress: Double?) -> Self {
+        Self(phase: .downloading, progress: progress)
+    }
+
+    static func loading() -> Self {
+        Self(phase: .loading, progress: nil)
+    }
+}
+
 extension RecognitionProfile {
     var unifiedConfig: UnifiedConfig {
         switch self {
@@ -68,10 +86,16 @@ actor LiveSpeechTranscriber {
     private var desiredProfile: RecognitionProfile = .fast
     private var preparedManagers: [RecognitionProfile: StreamingUnifiedAsrManager] = [:]
     private var preparation: ModelPreparation?
+    private var installationTask: Task<Void, Error>?
+    private let modelStore: SpeechModelStore
+
+    init(modelStore: SpeechModelStore = SpeechModelStore()) {
+        self.modelStore = modelStore
+    }
 
     func prepare(
         profile: RecognitionProfile = .fast,
-        onProgress: @escaping @Sendable (Double?) -> Void
+        onProgress: @escaping @Sendable (SpeechModelPreparationUpdate) -> Void
     ) async throws {
         desiredProfile = profile
         if let prepared = preparedManagers[profile], vad != nil {
@@ -93,21 +117,62 @@ actor LiveSpeechTranscriber {
             }
         }
 
+        if modelStore.allRequiredModelsAreInstalled() {
+            onProgress(.loading())
+        } else {
+            onProgress(.downloading(nil))
+            try await installAllModels { progress in
+                onProgress(.downloading(progress))
+            }
+            onProgress(.loading())
+        }
+
+        // Model installation suspends this actor while network I/O runs. A
+        // profile change can enter during that suspension, so never start a
+        // stale or second Core ML load after the shared install finishes.
+        guard desiredProfile == profile else { return }
+        if let preparation {
+            try await complete(preparation)
+            guard desiredProfile == profile else { return }
+            if let prepared = preparedManagers[profile], vad != nil {
+                manager = prepared
+                loadedProfile = profile
+                return
+            }
+        }
+
         let existingVad = vad
+        let store = modelStore
         let task = Task {
             let modelWeight = existingVad == nil ? 0.92 : 1.0
             let manager = StreamingUnifiedAsrManager(
                 config: profile.unifiedConfig
             )
-            try await manager.loadModels(progressHandler: { progress in
-                onProgress(progress.fractionCompleted * modelWeight)
+            try await manager.loadModels(to: store.modelsDirectory, progressHandler: { progress in
+                switch progress.phase {
+                case let .downloading(_, totalFiles) where totalFiles == 0:
+                    onProgress(.loading())
+                case .compiling:
+                    onProgress(.loading())
+                default:
+                    onProgress(.downloading(progress.fractionCompleted * modelWeight))
+                }
             })
             let preparedVad: VadManager
             if let existingVad {
                 preparedVad = existingVad
             } else {
-                preparedVad = try await VadManager(progressHandler: { progress in
-                    onProgress(0.92 + progress.fractionCompleted * 0.08)
+                preparedVad = try await VadManager(
+                    modelDirectory: store.baseDirectory,
+                    progressHandler: { progress in
+                        switch progress.phase {
+                        case let .downloading(_, totalFiles) where totalFiles == 0:
+                            onProgress(.loading())
+                        case .compiling:
+                            onProgress(.loading())
+                        default:
+                            onProgress(.downloading(0.92 + progress.fractionCompleted * 0.08))
+                        }
                 })
             }
             return PreparedModels(manager: manager, vad: preparedVad)
@@ -115,6 +180,38 @@ actor LiveSpeechTranscriber {
         let pending = ModelPreparation(id: UUID(), profile: profile, task: task)
         preparation = pending
         try await complete(pending)
+
+        // A failed Core ML load may make FluidAudio purge a corrupt repository
+        // and recover only the selected encoder. Restore the complete two-profile
+        // manifest before reporting preparation as finished.
+        if !modelStore.allRequiredModelsAreInstalled() {
+            onProgress(.downloading(nil))
+            try await installAllModels { progress in
+                onProgress(.downloading(progress))
+            }
+        }
+    }
+
+    private func installAllModels(
+        onProgress: @escaping @Sendable (Double?) -> Void
+    ) async throws {
+        if let installationTask {
+            try await installationTask.value
+            return
+        }
+
+        let store = modelStore
+        let task = Task {
+            try await store.installAll(onProgress: onProgress)
+        }
+        installationTask = task
+        do {
+            try await task.value
+            installationTask = nil
+        } catch {
+            installationTask = nil
+            throw error
+        }
     }
 
     private func complete(_ pending: ModelPreparation) async throws {

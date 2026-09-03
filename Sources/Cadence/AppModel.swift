@@ -37,6 +37,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var microphoneAuthorized = false
     @Published private(set) var accessibilityAuthorized = false
     @Published private(set) var speechModelStatus: SpeechModelStatus = .preparing(progress: nil)
+    @Published private(set) var speechModelPreparationPhase: SpeechModelPreparationPhase = .loading
     @Published private(set) var isRequestingPermissions = false
     @Published private(set) var permissionRequestMessage: String?
     @Published private(set) var insertionRecovery: InsertionRecovery?
@@ -58,6 +59,7 @@ final class AppModel: ObservableObject {
             guard settingsAreLoaded,
                   !isApplyingDictationProfile,
                   recognitionProfile != oldValue else { return }
+            speechModelPreparationPhase = .loading
             speechModelStatus = .preparing(progress: nil)
             Task { [weak self] in await self?.prepareSpeechModel() }
         }
@@ -201,7 +203,10 @@ final class AppModel: ObservableObject {
         guard speechModelStatus == .ready else {
             switch speechModelStatus {
             case .preparing:
-                state = .error("Cadence is preparing its local speech model. Try again when Settings shows Ready.")
+                let action = speechModelPreparationPhase == .downloading
+                    ? "downloading its Fast and Accurate models"
+                    : "loading its downloaded speech model"
+                state = .error("Cadence is \(action). Try again when Settings shows Ready.")
             case let .failed(message):
                 state = .error("The local speech model could not load: \(message)")
             case .ready:
@@ -454,7 +459,7 @@ final class AppModel: ObservableObject {
         let speechModelProgress: Double?
         switch speechModelStatus {
         case let .preparing(progress):
-            speechModelState = "preparing"
+            speechModelState = speechModelPreparationPhase.rawValue
             speechModelError = nil
             speechModelProgress = progress
         case .ready:
@@ -552,6 +557,7 @@ final class AppModel: ObservableObject {
         saveSettings()
 
         guard settingsAreLoaded, recognitionChanged else { return }
+        speechModelPreparationPhase = .loading
         speechModelStatus = .preparing(progress: nil)
         Task { [weak self] in await self?.prepareSpeechModel() }
     }
@@ -617,13 +623,15 @@ final class AppModel: ObservableObject {
 
     private func prepareSpeechModel() async {
         let profile = recognitionProfile
+        speechModelPreparationPhase = .loading
         speechModelStatus = .preparing(progress: nil)
         do {
-            try await transcriber.prepare(profile: profile) { [weak self] progress in
+            try await transcriber.prepare(profile: profile) { [weak self] update in
                 Task { @MainActor [weak self] in
                     guard self?.recognitionProfile == profile,
                           self?.speechModelStatus != .ready else { return }
-                    self?.speechModelStatus = .preparing(progress: progress)
+                    self?.speechModelPreparationPhase = update.phase
+                    self?.speechModelStatus = .preparing(progress: update.progress)
                 }
             }
             guard recognitionProfile == profile else { return }

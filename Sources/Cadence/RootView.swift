@@ -153,7 +153,9 @@ struct RootView: View {
             case .ready:
                 ("Ready to dictate", CadenceTheme.lime)
             case .preparing:
-                ("Preparing model…", CadenceTheme.coral)
+                (model.speechModelPreparationPhase == .downloading
+                    ? "Downloading models…"
+                    : "Loading local model…", CadenceTheme.coral)
             case .failed:
                 ("Model unavailable", CadenceTheme.coral)
             }

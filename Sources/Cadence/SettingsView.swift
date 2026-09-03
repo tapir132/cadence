@@ -292,12 +292,12 @@ struct SettingsView: View {
                     Group {
                         Text("Ready · \(model.recognitionProfile.detail)")
                         Text("Live transcription runs entirely on this Mac.")
+                        Text("Fast and Accurate are stored in Application Support and reused after app updates.")
                         Text("Say “period,” “full stop,” or “question mark” to insert punctuation.")
                     }
                     .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                 case let .preparing(progress):
-                    Text(progress.map { "Preparing local model · \(Int($0 * 100))%" }
-                         ?? "Preparing the local speech model…")
+                    Text(modelPreparationText(progress: progress))
                         .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
                 case let .failed(message):
                     Text(message).lineLimit(2)
@@ -317,7 +317,7 @@ struct SettingsView: View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Recognition profile").font(.system(size: 13, weight: .semibold))
-                Text("Both use Parakeet Unified 0.6B. Accurate uses more context and may prepare one additional local encoder the first time; later switches keep both profiles warm.")
+                Text("Both use Parakeet Unified 0.6B. Cadence downloads both encoders during first-time setup, stores them outside the app, and switches locally afterward.")
                     .font(.system(size: 11))
                     .foregroundStyle(CadenceTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -334,6 +334,17 @@ struct SettingsView: View {
             .disabled(model.isListening)
         }
         .padding(16)
+    }
+
+    private func modelPreparationText(progress: Double?) -> String {
+        switch model.speechModelPreparationPhase {
+        case .downloading:
+            return progress.map {
+                "Downloading Fast and Accurate models · \(Int($0 * 100))%"
+            } ?? "Downloading Fast and Accurate models…"
+        case .loading:
+            return "Loading the downloaded \(model.recognitionProfile.title) model from disk…"
+        }
     }
 
     private var recognitionSettingsPageRow: some View {

@@ -300,6 +300,22 @@ func preparedRecognitionProfilesSwitchWithoutReloading() async throws {
     #expect(elapsed < .milliseconds(250), "Warm profile switch took \(elapsed)")
 }
 
+/// The updater replaces the application bundle, not Application Support. Load
+/// both profiles with every FluidAudio network path disabled to prove the
+/// persistent cache is sufficient after an update.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CADENCE_RUN_OFFLINE_MODEL_TEST"] == "1"))
+func persistentModelsLoadAfterAnUpdateWithoutNetworkAccess() async throws {
+    let store = SpeechModelStore()
+    #expect(store.allRequiredModelsAreInstalled())
+
+    ModelHub.offlineMode = true
+    defer { ModelHub.offlineMode = false }
+
+    let transcriber = LiveSpeechTranscriber(modelStore: store)
+    try await transcriber.prepare(profile: .fast) { _ in }
+    try await transcriber.prepare(profile: .accurate) { _ in }
+}
+
 /// Drives a spoken trigger through the production model and asserts that only
 /// the replacement—not an ordinary trigger followed by an edit—crosses the
 /// live insertion boundary.

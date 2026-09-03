@@ -41,6 +41,16 @@ Apple supports distribution-signing a disk image only with a Developer ID Applic
 
 Nothing is uploaded automatically. Inspect the ignored `release/` directory before publishing.
 
+## Required validation before Stable
+
+Do not promote the first Stable (`1.0.0` or later) until the published Edge artifact passes this model-storage smoke test:
+
+- [ ] On a disposable macOS user account with no FluidAudio cache, launch Cadence and confirm first-time setup downloads both Fast and Accurate encoders plus Silero VAD into Application Support.
+- [ ] Update that exact installation to a newer Edge artifact and confirm the cached model file modification dates do not change, startup is labeled **Loading local model**, and neither encoder is downloaded again.
+- [ ] With Mac speakers available, run `CADENCE_RUN_LIVE_MIC_TEST=1 swift test -Xswiftc -warnings-as-errors --filter liveMicrophonePreservesContextualWordsAndQuestionTag`, then dictate once with Fast and once with Accurate in the published app.
+
+The offline integration test proves that complete cached models load without network access, but it does not replace this first-install, updater, and physical-microphone check of the exact release artifact.
+
 ## Configure GitHub Actions
 
 Export the private key to a temporary file:
