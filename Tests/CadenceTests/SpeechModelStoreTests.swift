@@ -64,3 +64,11 @@ import Testing
     try Data("unfinished".utf8).write(to: encoder.appendingPathComponent("weights.partial"))
     #expect(!store.allRequiredModelsAreInstalled())
 }
+
+@Test func lowDiskSpaceWarningAppearsOnlyBelowTheComfortableThreshold() {
+    #expect(SystemStorage.lowSpaceWarning(availableBytes: nil) == nil)
+    #expect(SystemStorage.lowSpaceWarning(availableBytes: 200_000_000_000) == nil)
+    let warning = SystemStorage.lowSpaceWarning(availableBytes: 8_200_000_000)
+    #expect(warning?.contains("8.2 GB") == true)
+    #expect(warning?.contains("recompiles") == true)
+}

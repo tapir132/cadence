@@ -10,6 +10,7 @@ struct CadenceBugReport: Codable, Equatable {
     struct System: Codable, Equatable {
         let operatingSystem: String
         let architecture: String
+        var availableDiskSpaceBytes: Int64? = nil
     }
 
     struct Permissions: Codable, Equatable {

@@ -294,6 +294,12 @@ struct SettingsView: View {
                         Text("Say “period,” “full stop,” or “question mark” to insert punctuation.")
                     }
                     .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                    if let warning = SystemStorage.lowSpaceWarning(availableBytes: SystemStorage.availableBytes()) {
+                        Text(warning)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(CadenceTheme.coral)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 case let .preparing(progress):
                     Text(modelPreparationText(progress: progress))
                         .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)

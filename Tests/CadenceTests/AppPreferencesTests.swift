@@ -237,8 +237,8 @@ import Testing
     #expect(essay.delivery.characterPlaybackEnabled)
 
     #expect(quick.cleanup == .none)
-    #expect(normal.cleanup == .light)
-    #expect(essay.cleanup == .medium)
+    #expect(normal.cleanup == .medium)
+    #expect(essay.cleanup == .light)
 
     let personalizedEssay = DictationConfiguration(
         recognitionProfile: essay.recognitionProfile,

@@ -48,6 +48,15 @@ Do not promote the first Stable (`1.0.0` or later) until the published Edge arti
 - [ ] On a disposable macOS user account with no FluidAudio cache, launch Cadence and confirm first-time setup downloads both Fast and Accurate encoders plus Silero VAD into Application Support.
 - [ ] Update that exact installation to a newer Edge artifact and confirm the cached model file modification dates do not change, startup is labeled **Loading local model**, and neither encoder is downloaded again.
 - [ ] With Mac speakers available, run `CADENCE_RUN_LIVE_MIC_TEST=1 swift test -Xswiftc -warnings-as-errors --filter liveMicrophonePreservesContextualWordsAndQuestionTag`, then dictate once with Fast and once with Accurate in the published app.
+- [ ] Run the built-in editor smoke test against the signed build while no other Cadence instance is dictating:
+
+  ```sh
+  CADENCE_SMOKE_TEST=1 dist/Cadence.app/Contents/MacOS/Cadence
+  ```
+
+  It waits for the model, opens a scratch TextEdit document, starts dictation without the hot key, speaks “I like this better”, pauses three seconds, speaks “than that”, and exits 0 only when Accessibility confirms the editor holds exactly `I like this better than that.` (the pause's automatic period retracted). The build needs the Microphone and Accessibility grants that the `Cadence Signing` identity already carries.
+
+`CADENCE_MEASURE_MODEL_LOAD=1 dist/Cadence.app/Contents/MacOS/Cadence` prints how long the launch path takes to make the selected model ready. A warm launch is well under a second; 20-60 seconds means Core ML recompiled, which macOS forces when free disk space is low enough to purge `~/Library/Caches/app.cadence.mac`.
 
 The offline integration test proves that complete cached models load without network access, but it does not replace this first-install, updater, and physical-microphone check of the exact release artifact.
 

@@ -114,9 +114,9 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
         case .quick:
             "For short replies, commands, and forms. Inserts completed chunks immediately, with no cleanup or pacing delay."
         case .normal:
-            "For messages, notes, and everyday dictation. Light cleanup removes fillers, and words wait briefly to stabilize before complete chunks are inserted."
+            "For messages, notes, and everyday dictation. Medium cleanup removes fillers and repairs restarts after you finish; words wait briefly to stabilize before complete chunks are inserted."
         case .essay:
-            "For long-form writing. Uses more speech context, Medium cleanup with Deeper editing, and character-paced delivery that finishes after you release the shortcut."
+            "For long-form writing. Uses more speech context, character-paced delivery that finishes after you release the shortcut, and Light cleanup only, so the typed text is never rewritten afterward."
         case .custom:
             "Your Advanced settings do not match a built-in profile."
         }
@@ -138,7 +138,7 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
         case .normal:
             DictationConfiguration(
                 recognitionProfile: .fast,
-                cleanup: .light,
+                cleanup: .medium,
                 delivery: TranscriptDeliveryPreferences(
                     typingBufferEnabled: true,
                     characterPlaybackEnabled: false,
@@ -149,7 +149,7 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
         case .essay:
             DictationConfiguration(
                 recognitionProfile: .accurate,
-                cleanup: .medium,
+                cleanup: .light,
                 delivery: TranscriptDeliveryPreferences(
                     typingBufferEnabled: true,
                     characterPlaybackEnabled: true,
@@ -184,8 +184,11 @@ enum DictationProfile: String, CaseIterable, Identifiable, Sendable {
 
 /// The single cleanup control. Light is the pre-insertion filler-word cleanup
 /// and Medium adds Deeper editing after the shortcut is released; both keep
-/// their original preference keys. Quick, Normal, and Essay set None, Light,
-/// and Medium, and changing the level under Advanced makes the profile Custom.
+/// their original preference keys. Quick, Normal, and Essay set None, Medium,
+/// and Light: Medium's end pass replaces the whole dictated span with one
+/// paste, which is harmless in a chat message but would undo the
+/// character-by-character typing history that Essay exists for. Changing the
+/// level under Advanced makes the profile Custom.
 enum AutoCleanupLevel: String, CaseIterable, Identifiable, Sendable {
     case none
     case light

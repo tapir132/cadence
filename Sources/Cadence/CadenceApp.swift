@@ -155,6 +155,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Release smoke test: `CADENCE_SMOKE_TEST=1 Cadence.app/Contents/MacOS/Cadence`
+        // dictates through the Mac's own speakers and microphone into a scratch
+        // TextEdit document and reports what the editor received.
+        if ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            Task { @MainActor in await Self.runSmokeTest() }
+            return
+        }
+        // Diagnostic: `CADENCE_MEASURE_MODEL_LOAD=1 Cadence.app/Contents/MacOS/Cadence`
+        // prints how long the normal launch path takes to make the selected
+        // model ready, then exits without any window, panel, or hot key.
+        if ProcessInfo.processInfo.environment["CADENCE_MEASURE_MODEL_LOAD"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            let start = ContinuousClock.now
+            Task { @MainActor in
+                while AppModel.shared.speechModelStatus != .ready {
+                    if case let .failed(message) = AppModel.shared.speechModelStatus {
+                        print("model load failed: \(message)")
+                        exit(1)
+                    }
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                print("model load: \(start.duration(to: .now))")
+                exit(0)
+            }
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         configureApplicationIcon()
         UpdateManager.shared.start()
@@ -223,4 +250,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openApp()
     }
     @objc private func checkForUpdates() { UpdateManager.shared.checkForUpdates() }
+
+    /// Waits for the model, opens a scratch TextEdit document, starts
+    /// dictation without the hot key, speaks two phrases with a three-second
+    /// thinking pause between them, then prints the transcript and the
+    /// accessibility verification of the editor. Exit status 0 means the
+    /// editor holds exactly the transcript, including the retracted period.
+    private static func runSmokeTest() async {
+        let model = AppModel.shared
+        while model.speechModelStatus != .ready {
+            if case let .failed(message) = model.speechModelStatus {
+                print("smoke: model failed: \(message)")
+                exit(1)
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Cadence-smoke-\(Int(Date().timeIntervalSince1970)).txt")
+        try? "".write(to: file, atomically: true, encoding: .utf8)
+        guard let textEdit = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.apple.TextEdit"
+        ) else {
+            print("smoke: TextEdit is not installed")
+            exit(1)
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        do {
+            _ = try await NSWorkspace.shared.open([file], withApplicationAt: textEdit, configuration: configuration)
+        } catch {
+            print("smoke: could not open TextEdit: \(error.localizedDescription)")
+            exit(1)
+        }
+        // Another app can steal focus back on a busy desktop (Steam did during
+        // one run), so settle, re-activate, and only start while TextEdit is
+        // still in front. Never dictate into whatever else happens to be there.
+        func textEditIsFrontmost() -> Bool {
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.TextEdit"
+        }
+        try? await Task.sleep(for: .milliseconds(800))
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.TextEdit")
+            .first?.activate()
+        var attempts = 0
+        while !textEditIsFrontmost(), attempts < 30 {
+            attempts += 1
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard textEditIsFrontmost() else {
+            print("smoke: TextEdit is not the frontmost app (\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown") is); not dictating")
+            exit(1)
+        }
+
+        model.refreshPermissions()
+        await model.startDictation()
+        guard model.isListening else {
+            print("smoke: dictation did not start: \(model.errorMessage ?? "unknown reason")")
+            exit(1)
+        }
+        guard textEditIsFrontmost() else {
+            model.cancelDictation()
+            print("smoke: focus moved away from TextEdit before speaking; cancelled")
+            exit(1)
+        }
+        await speak("I like this better")
+        try? await Task.sleep(for: .seconds(3))
+        await speak("than that")
+        try? await Task.sleep(for: .milliseconds(1_200))
+        model.stopDictation()
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while ContinuousClock.now < deadline {
+            if case .error = model.state { break }
+            if model.state == .idle, model.records.first?.insertionVerification != nil { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let record = model.records.first
+        print("smoke: transcript: \(record?.text ?? "<none>")")
+        print("smoke: target: \(record?.appName ?? "<none>")")
+        print("smoke: verification: \(record?.insertionVerification?.rawValue ?? "<none>")")
+        if let error = model.errorMessage { print("smoke: error: \(error)") }
+        exit(record?.insertionVerification == .confirmed ? 0 : 1)
+    }
+
+    private static func speak(_ text: String) async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        process.arguments = ["-r", "160", text]
+        do {
+            try process.run()
+        } catch {
+            print("smoke: say failed: \(error.localizedDescription)")
+            return
+        }
+        await withCheckedContinuation { continuation in
+            process.terminationHandler = { _ in continuation.resume() }
+        }
+    }
 }

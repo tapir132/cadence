@@ -1,6 +1,25 @@
 import FluidAudio
 import Foundation
 
+/// macOS purges purgeable caches, including Core ML's compiled-model cache,
+/// when free space runs low. Cadence then recompiles the encoders for 20-60 s
+/// at every launch, which looks like a download or an update problem.
+enum SystemStorage {
+    static let comfortableFreeBytes: Int64 = 20_000_000_000
+
+    static func availableBytes() -> Int64? {
+        try? URL(fileURLWithPath: NSHomeDirectory())
+            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage
+    }
+
+    static func lowSpaceWarning(availableBytes: Int64?) -> String? {
+        guard let availableBytes, availableBytes < comfortableFreeBytes else { return nil }
+        let free = ByteCountFormatter.string(fromByteCount: availableBytes, countStyle: .file)
+        return "Only \(free) free on this disk. macOS purges the compiled speech-model cache when space runs low, so every launch recompiles for 20-60 seconds until you free about 20 GB."
+    }
+}
+
 struct SpeechModelArtifact: Equatable, Sendable {
     let relativePath: String
     let isCompiledModel: Bool

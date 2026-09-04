@@ -498,7 +498,8 @@ final class AppModel: ObservableObject {
             ),
             system: .init(
                 operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
-                architecture: CadenceBugReport.currentArchitecture
+                architecture: CadenceBugReport.currentArchitecture,
+                availableDiskSpaceBytes: SystemStorage.availableBytes()
             ),
             permissions: .init(
                 microphone: microphoneAuthorized,
