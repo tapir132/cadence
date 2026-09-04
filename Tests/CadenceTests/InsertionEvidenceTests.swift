@@ -28,8 +28,26 @@ import Testing
     #expect(InsertionEvidenceClassifier.classify(evidence, insertedText: " hello") == .failed)
 }
 
-@Test func insertionEvidenceRejectsWhitespaceSubstitutionDespiteCursorAdvance() {
-    let evidence = InsertionEvidence(
+@Test func insertionEvidenceAcceptsWhitespaceReflowedText() {
+    // Terminal wraps a long line and a single-line field turns a paragraph
+    // break into spaces; the words arrived either way.
+    let wrapped = InsertionEvidence(
+        postingFailed: false,
+        targetApplicationChanged: false,
+        focusedElementChanged: false,
+        originalValue: "% ",
+        currentValue: "% Need you to look up how to implement the style\ntab and all of those things.",
+        originalSelection: CFRange(location: 2, length: 0),
+        currentSelection: CFRange(location: 80, length: 0)
+    )
+    #expect(
+        InsertionEvidenceClassifier.classify(
+            wrapped,
+            insertedText: "Need you to look up how to implement the style tab and all of those things."
+        ) == .confirmed
+    )
+
+    let flattened = InsertionEvidence(
         postingFailed: false,
         targetApplicationChanged: false,
         focusedElementChanged: false,
@@ -38,13 +56,30 @@ import Testing
         originalSelection: CFRange(location: 8, length: 0),
         currentSelection: CFRange(location: 21, length: 0)
     )
+    #expect(InsertionEvidenceClassifier.classify(flattened, insertedText: "first\nsecond") == .confirmed)
+}
 
-    #expect(
-        InsertionEvidenceClassifier.classify(
-            evidence,
-            insertedText: "first\nsecond"
-        ) == .failed
+@Test func insertionEvidenceTreatsAnOtherwiseChangedDocumentAsUnverifiable() {
+    // The composer emptied because the message was sent, or the editor
+    // rewrote the text: neither proves the paste was lost.
+    let sent = InsertionEvidence(
+        postingFailed: false,
+        targetApplicationChanged: false,
+        focusedElementChanged: false,
+        originalValue: "Message #general\nold draft",
+        currentValue: "Message #general",
+        originalSelection: CFRange(location: 26, length: 0),
+        currentSelection: CFRange(location: 0, length: 0)
     )
+    #expect(InsertionEvidenceClassifier.classify(sent, insertedText: " hello there") == .unavailable)
+}
+
+@Test func deliveryTimeConfirmationSurvivesALaterSendOrEdit() {
+    #expect(InsertionEvidenceClassifier.merged(atDelivery: .confirmed, afterCompletion: .failed, postingFailed: false) == .confirmed)
+    #expect(InsertionEvidenceClassifier.merged(atDelivery: .confirmed, afterCompletion: .unavailable, postingFailed: false) == .confirmed)
+    #expect(InsertionEvidenceClassifier.merged(atDelivery: .unavailable, afterCompletion: .failed, postingFailed: false) == .failed)
+    #expect(InsertionEvidenceClassifier.merged(atDelivery: nil, afterCompletion: .confirmed, postingFailed: false) == .confirmed)
+    #expect(InsertionEvidenceClassifier.merged(atDelivery: .confirmed, afterCompletion: .confirmed, postingFailed: true) == .failed)
 }
 
 @Test func insertionEvidenceConfirmsExactLocalTextFromContentEditableEditor() {

@@ -51,7 +51,16 @@ struct InsertionEvidenceClassifier {
             ) {
                 return .confirmed
             }
-            if current != original { return .failed }
+            // Terminals wrap long lines and chat composers normalize spacing,
+            // so the delivered words can be present with different
+            // whitespace. A document that changed in some other way is not
+            // evidence of failure either: the person may already have sent or
+            // edited the message. Only an untouched editor proves a lost paste.
+            if current != original {
+                return collapsingWhitespace(current).contains(collapsingWhitespace(insertedText))
+                    ? .confirmed
+                    : .unavailable
+            }
         } else if let originalRange = evidence.originalSelection,
                   let currentRange = evidence.currentSelection {
             let expectedAdvance = insertedText.utf16.count
@@ -68,6 +77,23 @@ struct InsertionEvidenceClassifier {
         }
 
         return .unavailable
+    }
+
+    /// Combines the check made the instant delivery finished with the one made
+    /// after cleanup. Text that was verifiably present at delivery counts as
+    /// delivered even if the person sent or edited it before the later check.
+    static func merged(
+        atDelivery: InsertionVerificationResult?,
+        afterCompletion: InsertionVerificationResult,
+        postingFailed: Bool
+    ) -> InsertionVerificationResult {
+        if postingFailed { return .failed }
+        if atDelivery == .confirmed { return .confirmed }
+        return afterCompletion
+    }
+
+    private static func collapsingWhitespace(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     private static func rangesEqual(_ first: CFRange?, _ second: CFRange?) -> Bool {

@@ -700,6 +700,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             await injector.waitUntilDrained()
             guard !Task.isCancelled else { return }
+            let deliveryVerification = injector.deliveryVerification
 
             var deliveredText = finalText
             var verificationText = insertedText
@@ -739,9 +740,13 @@ final class AppModel: ObservableObject {
             }
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            let result = TextInsertionVerifier.verify(
-                snapshot,
-                insertedText: verificationText,
+            let result = InsertionEvidenceClassifier.merged(
+                atDelivery: deliveryVerification,
+                afterCompletion: TextInsertionVerifier.verify(
+                    snapshot,
+                    insertedText: verificationText,
+                    postingFailed: injector.hadPostingFailure
+                ),
                 postingFailed: injector.hadPostingFailure
             )
             updateInsertionVerification(result, for: recordID)

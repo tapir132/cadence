@@ -154,6 +154,10 @@ final class KeystrokeInjector {
     }
 
     private(set) var hadPostingFailure = false
+    /// The accessibility check made the instant the queue last drained, before
+    /// cleanup runs and before the person can send or edit the text.
+    private(set) var deliveryVerification: InsertionVerificationResult?
+    private var deliveredText = ""
     private var insertionTask: Task<Void, Never>?
     private var pending: [Unit] = []
     private var nextPendingIndex = 0
@@ -176,6 +180,8 @@ final class KeystrokeInjector {
         expectedTarget = target
         self.deliveryMode = deliveryMode
         hadPostingFailure = false
+        deliveryVerification = nil
+        deliveredText = ""
     }
 
     /// `deleteBackward` characters are removed before `text` is typed, in the
@@ -277,8 +283,21 @@ final class KeystrokeInjector {
                 nextPendingIndex = 0
                 break
             }
+            switch unit {
+            case let .text(text): deliveredText += text
+            case .deleteBackward: deliveredText = String(deliveredText.dropLast())
+            }
         }
-        if generation == drainGeneration { insertionTask = nil }
+        if generation == drainGeneration {
+            insertionTask = nil
+            if !hadPostingFailure, !deliveredText.isEmpty, let expectedTarget {
+                deliveryVerification = TextInsertionVerifier.verify(
+                    expectedTarget,
+                    insertedText: deliveredText,
+                    postingFailed: false
+                )
+            }
+        }
     }
 
     private func dequeue() -> Unit? {
