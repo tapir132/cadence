@@ -2,51 +2,51 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleExecutable</key>
-    <string>Cadence</string>
-    <key>CFBundleIdentifier</key>
-    <string>app.cadence.mac</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Cadence</string>
-    <key>CFBundleDisplayName</key>
-    <string>Cadence</string>
-    <key>CFBundleIconFile</key>
-    <string>Cadence.icns</string>
-    <key>CFBundleIconName</key>
-    <string>Cadence</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.3.2</string>
-    <key>CFBundleVersion</key>
-    <string>102</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Cadence uses the microphone to turn your voice into text.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Cadence pauses Music or Spotify while you dictate when you enable Pause music.</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>SUFeedURL</key>
-    <string>https://github.com/tapir132/cadence/releases/latest/download/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>MbuViPzNlqUnPLA5SV73R6uPaNJAO52RkJds5RqMSc0=</string>
-    <key>SURequireSignedFeed</key>
-    <true/>
-    <key>SUVerifyUpdateBeforeExtraction</key>
-    <true/>
-    <key>SUEnableAutomaticChecks</key>
-    <true/>
-    <key>SUAutomaticallyUpdate</key>
-    <false/>
-    <key>SUScheduledCheckInterval</key>
-    <integer>21600</integer>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Cadence</string>
+	<key>CFBundleExecutable</key>
+	<string>Cadence</string>
+	<key>CFBundleIconFile</key>
+	<string>Cadence.icns</string>
+	<key>CFBundleIconName</key>
+	<string>Cadence</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.cadence.mac</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Cadence</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.4.1</string>
+	<key>CFBundleVersion</key>
+	<string>102</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Cadence pauses Music or Spotify while you dictate when you enable Pause music.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cadence uses the microphone to turn your voice into text.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/tapir132/cadence/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>MbuViPzNlqUnPLA5SV73R6uPaNJAO52RkJds5RqMSc0=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>21600</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>
