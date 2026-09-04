@@ -158,6 +158,8 @@ final class KeystrokeInjector {
     /// cleanup runs and before the person can send or edit the text.
     private(set) var deliveryVerification: InsertionVerificationResult?
     private var deliveredText = ""
+    var isDelivering: Bool { insertionTask != nil || nextPendingIndex < pending.count }
+    var deliveredCharacterCount: Int { deliveredText.count }
     private var insertionTask: Task<Void, Never>?
     private var pending: [Unit] = []
     private var nextPendingIndex = 0

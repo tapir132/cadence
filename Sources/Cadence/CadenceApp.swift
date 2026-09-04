@@ -158,9 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Release smoke test: `CADENCE_SMOKE_TEST=1 Cadence.app/Contents/MacOS/Cadence`
         // dictates through the Mac's own speakers and microphone into a scratch
         // TextEdit document and reports what the editor received.
-        if ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"] == "1" {
+        if let mode = ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"], mode == "1" || mode == "typer" {
             NSApp.setActivationPolicy(.prohibited)
-            Task { @MainActor in await Self.runSmokeTest() }
+            Task { @MainActor in await Self.runSmokeTest(typer: mode == "typer") }
             return
         }
         // Diagnostic: `CADENCE_MEASURE_MODEL_LOAD=1 Cadence.app/Contents/MacOS/Cadence`
@@ -256,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// thinking pause between them, then prints the transcript and the
     /// accessibility verification of the editor. Exit status 0 means the
     /// editor holds exactly the transcript, including the retracted period.
-    private static func runSmokeTest() async {
+    private static func runSmokeTest(typer: Bool) async {
         let model = AppModel.shared
         while model.speechModelStatus != .ready {
             if case let .failed(message) = model.speechModelStatus {
@@ -304,6 +304,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         model.refreshPermissions()
+        if typer {
+            let text = "Typed by Cadence, one character at a time."
+            model.startTyping(text)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+            while ContinuousClock.now < deadline {
+                if case .error = model.state { break }
+                if model.records.first?.text == text, model.records.first?.insertionVerification != nil { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            let record = model.records.first
+            print("smoke: typed: \(record?.text ?? "<none>")")
+            print("smoke: target: \(record?.appName ?? "<none>")")
+            print("smoke: verification: \(record?.insertionVerification?.rawValue ?? "<none>")")
+            if let error = model.errorMessage { print("smoke: error: \(error)") }
+            exit(record?.text == text && record?.insertionVerification == .confirmed ? 0 : 1)
+        }
         await model.startDictation()
         guard model.isListening else {
             print("smoke: dictation did not start: \(model.errorMessage ?? "unknown reason")")

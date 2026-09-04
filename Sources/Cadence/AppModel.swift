@@ -18,6 +18,12 @@ struct InsertionRecovery: Identifiable, Equatable {
     let appName: String
 }
 
+struct TypingProgress: Equatable {
+    let appName: String
+    let totalCharacters: Int
+    var deliveredCharacters: Int
+}
+
 enum DictationState: Equatable {
     case idle
     case listening
@@ -41,6 +47,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRequestingPermissions = false
     @Published private(set) var permissionRequestMessage: String?
     @Published private(set) var insertionRecovery: InsertionRecovery?
+    @Published private(set) var typing: TypingProgress?
     @Published var selectedSection: SidebarSection = .home
     @Published var dictionary: [String] = [] { didSet { persistDictionary() } }
     @Published private(set) var snippets: [TextSnippet] = [] { didSet { persistSnippets() } }
@@ -96,6 +103,7 @@ final class AppModel: ObservableObject {
     private var isApplyingDictationProfile = false
 
     var isListening: Bool { state == .listening || state == .finishing }
+    var isTyping: Bool { typing != nil }
     var lastTranscript: String { records.first?.text ?? "" }
     var totalWords: Int { records.reduce(0) { $0 + $1.text.wordCount } }
     var averageWPM: Int {
@@ -154,6 +162,10 @@ final class AppModel: ObservableObject {
     /// release, even when the release lands before the engine has started.
     func shortcutPressed() {
         shortcutHeld = true
+        if isTyping {
+            cancelTyping()
+            return
+        }
         guard !isListening else { return }
         Task {
             await startDictation()
@@ -184,7 +196,7 @@ final class AppModel: ObservableObject {
     }
 
     func startDictation() async {
-        guard state == .idle || isError else { return }
+        guard state == .idle || isError, !isTyping else { return }
         // Command-V is delivered asynchronously. Never replace its pasteboard
         // value by starting a new session before the prior paste drains.
         await injector.waitUntilDrained()
@@ -278,6 +290,85 @@ final class AppModel: ObservableObject {
             startedAt = nil
             insertionSnapshot = nil
         }
+    }
+
+    /// Typer: Cadence hides itself so keyboard focus returns to the document
+    /// that was active before, then types `text` there one character at a
+    /// time at the Essay pace. Pressing the dictation shortcut cancels it.
+    func startTyping(_ text: String) {
+        guard state == .idle, !isTyping,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Hiding returns focus to the document the person came from. When
+        // Cadence is not the active app (the smoke test, or a menu action),
+        // hiding would instead activate some unrelated earlier app.
+        if NSApp.isActive { NSApp.hide(nil) }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(220))
+            await self?.beginTyping(text)
+        }
+    }
+
+    func cancelTyping() {
+        guard isTyping else { return }
+        injector.cancelPending()
+        typing = nil
+    }
+
+    private func beginTyping(_ text: String) async {
+        guard state == .idle, !isTyping else { return }
+        await injector.waitUntilDrained()
+        refreshPermissions()
+        guard accessibilityAuthorized else {
+            requestAccessibilityPermission()
+            state = .error("Enable Accessibility so Cadence can type into other apps.")
+            selectedSection = .settings
+            return
+        }
+        guard let frontmost = NSWorkspace.shared.frontmostApplication,
+              frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            state = .error("Click into the document that should receive the text, then press Start in Typer.")
+            return
+        }
+        let appName = frontmost.localizedName ?? "Another app"
+        insertionVerificationTask?.cancel()
+        insertionRecovery = nil
+        let snapshot = TextInsertionVerifier.capture()
+        injector.beginSession(
+            target: snapshot,
+            deliveryMode: .characterByCharacter(
+                CharacterPlaybackPacing(
+                    wordsPerMinute: characterPlaybackWordsPerMinute,
+                    rhythm: characterPlaybackRhythm
+                )
+            )
+        )
+        typing = TypingProgress(appName: appName, totalCharacters: text.count, deliveredCharacters: 0)
+        let startedAt = Date()
+        injector.enqueue(text)
+        while isTyping, injector.isDelivering {
+            typing?.deliveredCharacters = injector.deliveredCharacterCount
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard isTyping else { return }
+        typing?.deliveredCharacters = injector.deliveredCharacterCount
+        let duration = max(Date().timeIntervalSince(startedAt), 1)
+        let deliveryVerification = injector.deliveryVerification
+        try? await Task.sleep(for: .milliseconds(180))
+        let result = InsertionEvidenceClassifier.merged(
+            atDelivery: deliveryVerification,
+            afterCompletion: TextInsertionVerifier.verify(
+                snapshot,
+                insertedText: text,
+                postingFailed: injector.hadPostingFailure
+            ),
+            postingFailed: injector.hadPostingFailure
+        )
+        let recordID = storeCompletedRecord(text, appName: appName, duration: duration)
+        updateInsertionVerification(result, for: recordID)
+        if result == .failed {
+            insertionRecovery = InsertionRecovery(text: text, appName: appName)
+        }
+        typing = nil
     }
 
     func stopDictation() {

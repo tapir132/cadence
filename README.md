@@ -17,6 +17,7 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Spoken punctuation, paragraph, and common correspondence formatting commands
 - Reliable standard clipboard pastes instead of lossy synthetic Unicode events
 - Essay-only character delivery with adjustable WPM and Steady, Natural, or Expressive typing rhythms
+- Typer: paste or dictate any text into Cadence, click into a document, press Start, and Cadence types it there at the Essay pace
 - Optional global music pause for Apple Music and Spotify while Cadence listens
 - Focus-bound delivery that refuses to paste after the user changes windows
 - Personal dictionary spelling, capitalization, and diacritics for names and specialized vocabulary
@@ -102,6 +103,10 @@ Each safe text delta is written to the current Mac's pasteboard and delivered wi
 When an editor exposes its insertion point, every chunk or character must advance the cursor before Cadence proceeds. A swallowed paste is retried twice; repeated failure stops the queue and surfaces the complete transcript instead of silently dropping text. Verification reads the editor through Accessibility the instant delivery finishes and again after completion; wrapped or respaced text still counts as delivered, and only an untouched editor, a focus change, or a posting failure shows the recovery card. Editors without accessible cursor progress use a conservative timeout and may run below the selected WPM.
 
 The application and focused window captured at recording start are checked again immediately before the V key-down. If the target changed, Cadence leaves the transcript on the clipboard and shows a recovery card instead of risking a paste into the wrong window. See [Research and architecture](docs/RESEARCH.md) for the evidence and tradeoffs behind this design.
+
+## Typer
+
+The Typer section holds a plain text box. Paste text into it, or dictate into it with any tool, click into the document that should receive the text, then return to Cadence and press Start. Cadence hides itself so keyboard focus returns to that document and types the text there one complete character at a time using the Essay typing speed and rhythm from Settings. Pressing the dictation shortcut stops it early. The result is verified through Accessibility and saved to the transcript history like a dictation. The rhythms are the same non-personal Steady, Natural, and Expressive profiles; Cadence still does not record or imitate anyone's real keystroke timing or typing mistakes.
 
 ## Privacy and security
 
