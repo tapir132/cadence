@@ -19,13 +19,22 @@ cp ".build/release/Cadence" "$CONTENTS_DIR/MacOS/Cadence"
 cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "Resources/Cadence.icns" "$CONTENTS_DIR/Resources/Cadence.icns"
 
-# A locally installed smoke-test build may share a bundle identifier and update
-# preferences with an older published build. Give it a current numeric build
-# number so Sparkle cannot silently replace uncommitted fixes with the existing
-# Edge artifact. Distribution workflows configure their immutable version
-# before invoking this script and opt out of this local-only stamp.
+# A local build shares its bundle identifier and update preferences with the
+# installed copy, so its numeric build number decides whether Sparkle offers
+# the Edge feed. Edge stamps each build with its commit timestamp; a clean
+# checkout gets the same stamp, so the matching Edge build is not offered and
+# every later commit is. Uncommitted changes get the current time so the feed
+# cannot silently replace them with the older published artifact, and the
+# next commit is newer still. A wall-clock stamp for every local build would
+# outrank the feed forever and strand the machine on stale code.
+# Distribution workflows configure their immutable version before invoking
+# this script and opt out of this local-only stamp.
 if [[ "${CADENCE_DISTRIBUTION_BUILD:-0}" != "1" ]]; then
-  LOCAL_BUILD_NUMBER="$(date +%s)"
+  if [[ -z "$(git -C "$PROJECT_DIR" status --porcelain)" ]]; then
+    LOCAL_BUILD_NUMBER="$(git -C "$PROJECT_DIR" show -s --format=%ct HEAD)"
+  else
+    LOCAL_BUILD_NUMBER="$(date +%s)"
+  fi
   LOCAL_SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS_DIR/Info.plist")"
   LOCAL_REVISION="$(git -C "$PROJECT_DIR" rev-parse --short=7 HEAD)"
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $LOCAL_BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
