@@ -242,16 +242,16 @@ struct MeetingNoteView: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if note.lines.isEmpty {
                         Text(isRecording ? "Listening. Words appear here as people speak." : "Nothing was said while notes were on.")
-                            .font(.system(size: 12)).foregroundStyle(CadenceTheme.muted)
+                            .font(.system(size: 14)).foregroundStyle(CadenceTheme.muted)
                             .padding(.top, 8)
                     }
                     ForEach(note.lines) { line in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(line.speaker.title)
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(CadenceTheme.muted)
                             Text(line.text)
-                                .font(.system(size: 13))
+                                .font(.system(size: 14))
                                 .lineSpacing(3)
                                 .textSelection(.enabled)
                                 .padding(.horizontal, 12).padding(.vertical, 8)
@@ -277,13 +277,13 @@ struct MeetingNoteView: View {
 
     private var thoughtsEditor: some View {
         TextEditor(text: $thoughts)
-            .font(.system(size: 13))
+            .font(.system(size: 14))
             .scrollContentBackground(.hidden)
             .padding(compact ? 12 : 8)
             .overlay(alignment: .topLeading) {
                 if thoughts.isEmpty {
                     Text("Type or dictate your own notes here while the call runs.")
-                        .font(.system(size: 13)).foregroundStyle(CadenceTheme.muted.opacity(0.7))
+                        .font(.system(size: 14)).foregroundStyle(CadenceTheme.muted.opacity(0.7))
                         .padding(.horizontal, compact ? 17 : 13).padding(.top, compact ? 20 : 16)
                         .allowsHitTesting(false)
                 }
@@ -377,7 +377,7 @@ struct NotesView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            list.frame(width: 300)
+            list.frame(width: 400)
             Rectangle().fill(CadenceTheme.line).frame(width: 1)
             detail
         }
@@ -390,13 +390,14 @@ struct NotesView: View {
                 .foregroundStyle(CadenceTheme.muted)
                 .padding(.top, 20)
             Text("Every call, in your words.")
-                .font(.system(size: 26, weight: .medium, design: .serif))
-                .tracking(-0.9)
-                .padding(.top, 18)
-            Text("When another app opens your microphone, Cadence offers to take notes. Both sides are transcribed on this Mac; nothing joins the call.")
-                .font(.system(size: 12)).foregroundStyle(CadenceTheme.muted)
+                .font(.system(size: 40, weight: .medium, design: .serif))
+                .tracking(-1.4)
+                .padding(.top, 28)
+            Text("When a call app opens your microphone, Cadence offers to take notes. Both sides are transcribed on this Mac; nothing joins the call.")
+                .font(.system(size: 14)).foregroundStyle(CadenceTheme.muted)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 8)
+                .padding(.top, 12)
             Button {
                 if meetings.isRecording {
                     meetings.isNotepadVisible = true
@@ -409,11 +410,11 @@ struct NotesView: View {
             .buttonStyle(.borderedProminent)
             .tint(meetings.isRecording ? CadenceTheme.coral : CadenceTheme.ink)
             .controlSize(.large)
-            .padding(.top, 18)
+            .padding(.top, 22)
 
             if meetings.notes.isEmpty {
                 Text("Your first meeting will land here.")
-                    .font(.system(size: 12)).foregroundStyle(CadenceTheme.muted)
+                    .font(.system(size: 14)).foregroundStyle(CadenceTheme.muted)
                     .padding(.top, 36)
             } else {
                 ScrollView {
@@ -424,29 +425,29 @@ struct NotesView: View {
                         }
                     }
                 }
-                .padding(.top, 28)
+                .padding(.top, 32)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 36)
     }
 
     private func row(_ note: MeetingNote) -> some View {
         Button { selectedID = note.id } label: {
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(note.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(note.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                     Spacer()
                     if meetings.session?.noteID == note.id, meetings.isRecording {
                         Circle().fill(CadenceTheme.coral).frame(width: 7, height: 7)
                     }
                 }
                 Text(note.lines.first?.text ?? (note.thoughts.isEmpty ? "No transcript" : note.thoughts))
-                    .font(.system(size: 12)).foregroundStyle(CadenceTheme.muted).lineLimit(2)
+                    .font(.system(size: 13)).foregroundStyle(CadenceTheme.muted).lineLimit(2).lineSpacing(2)
                 Text("\(note.date.formatted(date: .abbreviated, time: .shortened)) · \(MeetingNote.durationText(note.duration))")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(CadenceTheme.muted)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(CadenceTheme.muted)
             }
-            .padding(.vertical, 12)
+            .padding(.vertical, 14)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selectedID == note.id ? Color.white.opacity(0.6) : .clear))
@@ -473,12 +474,13 @@ struct NotesView: View {
                     }
                     .padding(.top, 10)
                 }
-                .padding(32)
+                .padding(42)
+                .frame(maxWidth: 860, alignment: .topLeading)
             } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "text.bubble").font(.system(size: 26)).foregroundStyle(CadenceTheme.muted)
+                VStack(spacing: 12) {
+                    Image(systemName: "text.bubble").font(.system(size: 30)).foregroundStyle(CadenceTheme.muted)
                     Text("Select a meeting to read its transcript and notes.")
-                        .font(.system(size: 12)).foregroundStyle(CadenceTheme.muted)
+                        .font(.system(size: 14)).foregroundStyle(CadenceTheme.muted)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

@@ -10,6 +10,8 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case settings = "Settings"
 
     var id: String { rawValue }
+    /// Sections still being shaped carry a small tag in the sidebar.
+    var isWorkInProgress: Bool { self == .typer }
     var icon: String {
         switch self {
         case .home: "rectangle.stack"
@@ -137,6 +139,15 @@ struct RootView: View {
             HStack(spacing: 11) {
                 Image(systemName: section.icon).frame(width: 18)
                 Text(section.rawValue).font(.system(size: 13, weight: .medium))
+                if section.isWorkInProgress {
+                    Text("WIP")
+                        .font(.system(size: 8, weight: .bold))
+                        .tracking(0.6)
+                        .foregroundStyle(CadenceTheme.ink)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Capsule().fill(CadenceTheme.lime.opacity(0.85)))
+                        .accessibilityLabel("Work in progress")
+                }
                 Spacer()
             }
             .foregroundStyle(model.selectedSection == section ? CadenceTheme.cream : Color.white.opacity(0.48))

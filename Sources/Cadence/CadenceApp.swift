@@ -215,6 +215,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let notesSmokeTest = ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"] == "notes"
         if !notesSmokeTest { UpdateManager.shared.start() }
         configureMainWindow()
+        // Diagnostic: `CADENCE_OPEN_SECTION=Notes` lands on that Hub section.
+        if let name = ProcessInfo.processInfo.environment["CADENCE_OPEN_SECTION"],
+           let section = SidebarSection(rawValue: name) {
+            AppModel.shared.selectedSection = section
+        }
         floatingPanel = FloatingPanelController(model: AppModel.shared)
         notepad = MeetingNotepadWindowController(meetings: MeetingNotesModel.shared)
         configureStatusItem()

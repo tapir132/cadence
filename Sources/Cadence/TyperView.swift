@@ -8,9 +8,16 @@ struct TyperView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("TYPER")
-                .font(.system(size: 10, weight: .bold)).tracking(1.8)
-                .foregroundStyle(CadenceTheme.muted)
+            HStack(spacing: 10) {
+                Text("TYPER")
+                    .font(.system(size: 10, weight: .bold)).tracking(1.8)
+                    .foregroundStyle(CadenceTheme.muted)
+                Text("WORK IN PROGRESS")
+                    .font(.system(size: 9, weight: .bold)).tracking(1.2)
+                    .foregroundStyle(CadenceTheme.ink)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(CadenceTheme.lime.opacity(0.85)))
+            }
             Text("Type it in for you.")
                 .font(.system(size: 40, weight: .medium, design: .serif))
                 .tracking(-1.4)
