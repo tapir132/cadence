@@ -43,10 +43,17 @@ import Testing
     #expect(note.markdown.contains("**You:** Yes I can"))
 }
 
-@Test func onlyOtherProcessesCountAsACall() {
-    let users = [MicrophoneUser(pid: 42, bundleIdentifier: "app.cadence.mac"), MicrophoneUser(pid: 99, bundleIdentifier: "us.zoom.xos")]
+@Test func onlyKnownCallAppsInOtherProcessesCountAsACall() {
+    let users = [
+        MicrophoneUser(pid: 42, bundleIdentifier: "us.zoom.xos"),
+        MicrophoneUser(pid: 7, bundleIdentifier: "com.electron.wispr-flow.helper"),
+        MicrophoneUser(pid: 8, bundleIdentifier: nil),
+        MicrophoneUser(pid: 99, bundleIdentifier: "com.google.Chrome.helper")
+    ]
     #expect(MicrophoneUseMonitor.callCandidate(among: users, ownPID: 42)?.pid == 99)
-    #expect(MicrophoneUseMonitor.callCandidate(among: [users[0]], ownPID: 42) == nil)
+    #expect(MicrophoneUseMonitor.callCandidate(among: Array(users[1...2]), ownPID: 1) == nil)
+    #expect(MicrophoneUseMonitor.appName(for: users[3]) == "Chrome")
+    #expect(MicrophoneUseMonitor.appName(for: MicrophoneUser(pid: 5, bundleIdentifier: "com.microsoft.teams2")) == "Teams")
 }
 
 @MainActor

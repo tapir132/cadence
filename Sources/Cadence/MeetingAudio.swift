@@ -39,18 +39,58 @@ enum MicrophoneUseMonitor {
         }
     }
 
-    /// The call worth offering notes for, ignoring Cadence itself.
+    /// Apps whose open microphone means a call. Dictation tools such as Wispr
+    /// Flow, voice memos, and unknown apps also open the microphone, so only
+    /// these prefixes count. Browser helpers cover Meet, Zoom web, and Teams
+    /// web; WebKit's GPU process is how Safari records.
+    /// ponytail: static prefix list; add entries as people report missed apps.
+    static let callApps: [(prefix: String, name: String)] = [
+        ("us.zoom.xos", "Zoom"),
+        ("com.microsoft.teams", "Teams"),
+        ("com.tinyspeck.slackmacgap", "Slack"),
+        ("com.hnc.Discord", "Discord"),
+        ("com.apple.FaceTime", "FaceTime"),
+        ("com.cisco.webex", "Webex"),
+        ("Cisco-Systems.Spark", "Webex"),
+        ("com.google.Chrome", "Chrome"),
+        ("com.apple.WebKit", "Safari"),
+        ("com.apple.Safari", "Safari"),
+        ("org.mozilla", "Firefox"),
+        ("company.thebrowser.Browser", "Arc"),
+        ("com.brave.Browser", "Brave"),
+        ("com.microsoft.edgemac", "Edge"),
+        ("com.vivaldi.Vivaldi", "Vivaldi"),
+        ("com.whatsapp.WhatsApp", "WhatsApp"),
+        ("net.whatsapp.WhatsApp", "WhatsApp"),
+        ("org.telegram.desktop", "Telegram"),
+        ("ru.keepcoder.Telegram", "Telegram"),
+        ("com.skype.skype", "Skype"),
+        ("com.loom.desktop", "Loom"),
+        ("com.gotomeeting", "GoTo"),
+        ("com.logmein.GoToMeeting", "GoTo"),
+        ("com.bluejeans", "BlueJeans"),
+        ("com.amazon.Amazon-Chime", "Chime"),
+        ("com.dialpad", "Dialpad"),
+        ("com.ringcentral", "RingCentral"),
+        ("com.whereby", "Whereby")
+    ]
+
+    /// The call worth offering notes for, ignoring Cadence itself and any
+    /// microphone user that is not a known call app.
     static func callCandidate(
         among users: [MicrophoneUser],
         ownPID: pid_t = ProcessInfo.processInfo.processIdentifier
     ) -> MicrophoneUser? {
-        users.first { $0.pid != ownPID && $0.pid > 0 }
+        users.first { $0.pid != ownPID && $0.pid > 0 && callApp(for: $0) != nil }
+    }
+
+    static func callApp(for user: MicrophoneUser) -> String? {
+        guard let bundle = user.bundleIdentifier else { return nil }
+        return callApps.first { bundle.hasPrefix($0.prefix) }?.name
     }
 
     static func appName(for user: MicrophoneUser) -> String {
-        NSRunningApplication(processIdentifier: user.pid)?.localizedName
-            ?? user.bundleIdentifier?.split(separator: ".").last.map(String.init)
-            ?? "An app"
+        callApp(for: user) ?? "A call"
     }
 }
 

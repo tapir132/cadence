@@ -25,7 +25,7 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Local snippets that expand a spoken trigger before any trigger words reach the editor
 - Optional one-second recognition-stability buffer with an immediate live preview
 - Configurable global keyboard shortcut
-- Edge-aware idle handle that expands on hover or while dictating
+- Edge-aware idle handle that expands on hover or while dictating; docked on a side edge the listening bar stands upright with the waveform only
 - Eight edge snap points, Command-drag free positioning, and adjustable sizing
 - Adjustable floating-bar size from 65% to 135%
 - Local transcript history and words-per-minute statistics
@@ -112,9 +112,9 @@ The Typer section holds a plain text box. Paste text into it, or dictate into it
 
 ## Notes
 
-Cadence polls Core Audio's process list every two seconds. When another app such as Zoom, Google Meet in a browser, Teams, Slack, Discord, or FaceTime starts recording from the microphone, a non-activating **Meeting detected** card appears beside the floating bar. Nothing starts on its own: **Take notes** opens the floating notepad and begins recording, the X snoozes the offer until that call releases the microphone, and the Settings toggle turns the offer off entirely. Notes can also start manually from the Notes section, the menu bar item, or ⌃⌘N for in-person conversations.
+Cadence polls Core Audio's process list every two seconds. When a known call app (Zoom, Teams, Slack, Discord, FaceTime, Webex, WhatsApp, Telegram, or a browser running Meet or another web call) starts recording from the microphone, a non-activating **Meeting detected** card appears beside the floating bar. Nothing starts on its own: **Take notes** opens the floating notepad and begins recording, the X snoozes the offer until that call releases the microphone, and the Settings toggle turns the offer off entirely. Notes can also start manually from the Notes section, the menu bar item, or ⌃⌘N for in-person conversations.
 
-While notes run, the microphone and a Core Audio process tap of everything the Mac plays (macOS 14.2+, excluding Cadence itself) are mixed into one stream for the same local Parakeet decoder used for dictation. Words appear live in the Transcript tab and are labeled **You** or **Them** by which side was louder, and the My thoughts tab is a plain editor for your own notes. When notes were started from a detected call, they stop automatically once that app releases the microphone; otherwise the stop control in the notepad ends them. Each meeting is saved as an atomic JSON file in Cadence's Application Support directory and can be copied as Markdown. Cadence never records the screen, and there is no cloud summary: the transcript and your notes are the result.
+While notes run, the microphone and a Core Audio process tap of everything the Mac plays (macOS 14.2+, excluding Cadence itself) are mixed into one stream for a second local Parakeet decoder running the Accurate profile, independent of the dictation profile. Words appear live in the Transcript tab and are labeled **You** or **Them** by which side was louder, and the My thoughts tab is a plain editor for your own notes. When notes were started from a detected call, they stop automatically once that app releases the microphone; otherwise the stop control in the notepad ends them. Each meeting is saved as an atomic JSON file in Cadence's Application Support directory and can be copied as Markdown. Cadence never records the screen, and there is no cloud summary: the transcript and your notes are the result.
 
 ## Privacy and security
 

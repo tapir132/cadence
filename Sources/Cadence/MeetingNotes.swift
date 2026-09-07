@@ -215,7 +215,9 @@ final class MeetingNotesModel: ObservableObject {
             return
         }
         do {
-            try await transcriber.prepare(profile: .fast) { _ in }
+            // A transcript is read later, not typed live, so spend the extra
+            // context on accuracy. Dictation keeps its own decoder and profile.
+            try await transcriber.prepare(profile: .accurate) { _ in }
         } catch {
             fail("The local speech model could not load: \(error.localizedDescription)", noteID: noteID)
             return

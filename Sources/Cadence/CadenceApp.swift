@@ -183,6 +183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // TextEdit document and reports what the editor received.
         if let mode = ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"], mode == "1" || mode == "typer" {
             NSApp.setActivationPolicy(.prohibited)
+            // The bar is what a person watches while dictating; show it so a
+            // screenshot during the run verifies its placement and shape.
+            floatingPanel = FloatingPanelController(model: AppModel.shared)
             Task { @MainActor in await Self.runSmokeTest(typer: mode == "typer") }
             return
         }

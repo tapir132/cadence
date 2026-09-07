@@ -63,15 +63,19 @@ struct SnapGeometryTests {
     @Test func hoverDragAndListeningKeepTheControlExpanded() {
         #expect(mode(isHovered: true) == .idle)
         #expect(mode(isDragging: true) == .idle)
-        #expect(mode(isListening: true) == .listening)
+        #expect(mode(isListening: true) == .listening(vertical: false))
+        #expect(mode(isListening: true, placement: .left) == .listening(vertical: true))
+        #expect(mode(isListening: true, placement: .right) == .listening(vertical: true))
+        #expect(mode(isListening: true, placement: .free, x: 0.98, y: 0.5) == .listening(vertical: true))
+        #expect(mode(isListening: true, placement: .top) == .listening(vertical: false))
         #expect(mode(hasError: true) == .error)
     }
 
     @MainActor
     @Test func deliveredDictationStateSelectsTheExpandedMode() {
         #expect(mode(state: .idle) == .collapsed(.bottom))
-        #expect(mode(state: .listening) == .listening)
-        #expect(mode(state: .finishing) == .listening)
+        #expect(mode(state: .listening) == .listening(vertical: false))
+        #expect(mode(state: .finishing) == .listening(vertical: false))
         #expect(mode(state: .error("Stopped")) == .error)
     }
 

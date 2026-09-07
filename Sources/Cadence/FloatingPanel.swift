@@ -12,7 +12,9 @@ enum FloatingDockEdge: Equatable {
 enum FloatingBarMode: Equatable {
     case collapsed(FloatingDockEdge)
     case idle
-    case listening
+    /// Docked on a side edge the bar stands upright, waveform only, so it
+    /// never sprawls across the document it is typing into.
+    case listening(vertical: Bool)
     case error
 
     var baseSize: NSSize {
@@ -23,6 +25,8 @@ enum FloatingBarMode: Equatable {
             NSSize(width: 18, height: 58)
         case .idle:
             NSSize(width: 56, height: 56)
+        case .listening(vertical: true):
+            NSSize(width: 64, height: 180)
         case .listening, .error:
             NSSize(width: 390, height: 64)
         }
@@ -64,10 +68,6 @@ final class FloatingBarPresentation: ObservableObject {
         freeX: Double,
         freeY: Double
     ) -> FloatingBarMode {
-        if hasError { return .error }
-        if isListening { return .listening }
-        if isHovered || isDragging { return .idle }
-
         let edge: FloatingDockEdge = switch placement {
         case .top: .top
         case .right: .right
@@ -75,6 +75,9 @@ final class FloatingBarPresentation: ObservableObject {
         case .left: .left
         case .free: nearestEdge(x: freeX, y: freeY)
         }
+        if hasError { return .error }
+        if isListening { return .listening(vertical: edge == .left || edge == .right) }
+        if isHovered || isDragging { return .idle }
         return .collapsed(edge)
     }
 
@@ -685,6 +688,8 @@ struct FloatingBar: View {
     var body: some View {
         Group {
             switch presentation.mode {
+            case .listening(vertical: true):
+                verticalListeningBar
             case .listening:
                 listeningBar
             case .error:
@@ -705,42 +710,39 @@ struct FloatingBar: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.barScale)
     }
 
+    /// Releasing the shortcut ends dictation, so the bar carries no controls:
+    /// only the waveform and the words as they are recognized.
     private var listeningBar: some View {
-        HStack(spacing: 9) {
-            Button { model.cancelDictation() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Color.white.opacity(0.28)))
-            }
-            .buttonStyle(.plain)
-
+        HStack(spacing: 12) {
             WaveformMark(level: model.audioLevel, bars: 6)
+                .padding(.leading, 6)
 
             Text(previewText)
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.62))
                 .lineLimit(1)
-                .frame(maxWidth: 195, alignment: .leading)
-
-            Button { model.stopDictation() } label: {
-                Image(systemName: model.state == .finishing ? "ellipsis" : "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(CadenceTheme.ink)
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(CadenceTheme.cream))
-            }
-            .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 14)
         .frame(width: 370, height: 44)
-        .background(
-            Capsule()
-                .fill(CadenceTheme.ink.opacity(0.97))
-                .overlay(Capsule().stroke(Color(red: 0.3, green: 0.29, blue: 0.26), lineWidth: 1))
-                .shadow(color: .black.opacity(0.22), radius: 8, y: 4)
-        )
+        .background(listeningCapsule)
         .frame(width: 390, height: 64)
+    }
+
+    private var verticalListeningBar: some View {
+        WaveformMark(level: model.audioLevel, bars: 6)
+            .rotationEffect(.degrees(90))
+            .frame(width: 44, height: 160)
+            .background(listeningCapsule)
+            .frame(width: 64, height: 180)
+            .accessibilityLabel(previewText)
+    }
+
+    private var listeningCapsule: some View {
+        Capsule()
+            .fill(CadenceTheme.ink.opacity(0.97))
+            .overlay(Capsule().stroke(Color(red: 0.3, green: 0.29, blue: 0.26), lineWidth: 1))
+            .shadow(color: .black.opacity(0.22), radius: 8, y: 4)
     }
 
     private var previewText: String {
