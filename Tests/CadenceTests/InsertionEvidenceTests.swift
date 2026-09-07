@@ -2,6 +2,19 @@ import Foundation
 import Testing
 @testable import Cadence
 
+@Test func releaseSmokeTestRequiresExactTranscriptAndConfirmedDelivery() {
+    let expected = ReleaseSmokeTestGate.expectedTranscript
+
+    #expect(ReleaseSmokeTestGate.passes(transcript: expected, verification: .confirmed))
+    #expect(!ReleaseSmokeTestGate.passes(
+        transcript: "I like this better. Then that.",
+        verification: .confirmed
+    ))
+    #expect(!ReleaseSmokeTestGate.passes(transcript: expected, verification: .failed))
+    #expect(!ReleaseSmokeTestGate.passes(transcript: expected, verification: .unavailable))
+    #expect(!ReleaseSmokeTestGate.passes(transcript: nil, verification: .confirmed))
+}
+
 @Test func insertionEvidenceConfirmsCursorAdvance() {
     let evidence = InsertionEvidence(
         postingFailed: false,

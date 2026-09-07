@@ -2,6 +2,17 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
+enum ReleaseSmokeTestGate {
+    static let expectedTranscript = "I like this better than that."
+
+    static func passes(
+        transcript: String?,
+        verification: InsertionVerificationResult?
+    ) -> Bool {
+        transcript == expectedTranscript && verification == .confirmed
+    }
+}
+
 @main
 struct CadenceApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -347,7 +358,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("smoke: target: \(record?.appName ?? "<none>")")
         print("smoke: verification: \(record?.insertionVerification?.rawValue ?? "<none>")")
         if let error = model.errorMessage { print("smoke: error: \(error)") }
-        exit(record?.insertionVerification == .confirmed ? 0 : 1)
+        exit(
+            ReleaseSmokeTestGate.passes(
+                transcript: record?.text,
+                verification: record?.insertionVerification
+            ) ? 0 : 1
+        )
     }
 
     private static func speak(_ text: String) async {
