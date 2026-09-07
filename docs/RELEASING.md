@@ -56,6 +56,8 @@ Do not promote the first Stable (`1.0.0` or later) until the published Edge arti
 
   It waits for the model, opens a scratch TextEdit document, starts dictation without the hot key, speaks “I like this better”, pauses three seconds, speaks “than that”, and exits 0 only when Accessibility confirms the editor holds exactly `I like this better than that.` (the pause's automatic period retracted). The build needs the Microphone and Accessibility grants that the `Cadence Signing` identity already carries.
 
+`CADENCE_SMOKE_TEST=notes` exercises the meeting note taker: it starts notes, speaks both sides of a short exchange through the speakers, stops, prints the saved lines, and exits 0 when the transcript contains both phrases. The first run on a Mac shows the one-time System Audio Recording prompt, which someone must answer; add `CADENCE_NOTES_MICROPHONE_ONLY=1` to skip the system tap and verify the rest without that grant.
+
 `CADENCE_SMOKE_TEST=typer` runs the same TextEdit setup for the Typer section instead: it types a fixed sentence character by character and exits 0 when Accessibility confirms it. Launch either mode through `open -n -W --env CADENCE_SMOKE_TEST=... --stdout smoke.log dist/Cadence.app` when the shell itself lacks Accessibility, so the app is its own responsible process for privacy checks.
 
 `CADENCE_MEASURE_MODEL_LOAD=1 dist/Cadence.app/Contents/MacOS/Cadence` prints how long the launch path takes to make the selected model ready. A warm launch is well under a second; 20-60 seconds means Core ML recompiled, which macOS forces when free disk space is low enough to purge `~/Library/Caches/app.cadence.mac`.

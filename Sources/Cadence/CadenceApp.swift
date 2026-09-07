@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+@preconcurrency import Combine
 import SwiftUI
 
 enum ReleaseSmokeTestGate {
@@ -22,6 +23,7 @@ struct CadenceApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(AppModel.shared)
+                .environmentObject(MeetingNotesModel.shared)
                 .frame(minWidth: 940, minHeight: 620)
                 .preferredColorScheme(.light)
         }
@@ -39,6 +41,13 @@ struct CadenceApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updateManager.checkForUpdates() }
                     .disabled(!updateManager.canCheckForUpdates)
+            }
+            CommandMenu("Notes") {
+                Button(MeetingNotesModel.shared.isRecording ? "Stop Notes" : "Take Notes") {
+                    let meetings = MeetingNotesModel.shared
+                    if meetings.isRecording { meetings.stopRecording() } else { meetings.startRecording() }
+                }
+                .keyboardShortcut("n", modifiers: [.control, .command])
             }
             CommandMenu("Dictation") {
                 Button(AppModel.shared.isListening ? "Stop Dictation" : "Start Dictation") {
@@ -163,7 +172,10 @@ final class GlobalHotKey {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var floatingPanel: FloatingPanelController?
+    private var notepad: MeetingNotepadWindowController?
     private var statusItem: NSStatusItem?
+    private var notesMenuItem: NSMenuItem?
+    private var recordingObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Release smoke test: `CADENCE_SMOKE_TEST=1 Cadence.app/Contents/MacOS/Cadence`
@@ -195,14 +207,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.setActivationPolicy(.regular)
         configureApplicationIcon()
-        UpdateManager.shared.start()
+        // `CADENCE_SMOKE_TEST=notes` keeps the normal app running so the notepad
+        // is visible, then records a spoken exchange through the speakers.
+        let notesSmokeTest = ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"] == "notes"
+        if !notesSmokeTest { UpdateManager.shared.start() }
         configureMainWindow()
         floatingPanel = FloatingPanelController(model: AppModel.shared)
+        notepad = MeetingNotepadWindowController(meetings: MeetingNotesModel.shared)
         configureStatusItem()
+        recordingObserver = MeetingNotesModel.shared.$session
+            .map { $0?.phase == .recording || $0?.phase == .preparing }
+            .removeDuplicates()
+            .sink { [weak self] recording in
+                self?.statusItem?.button?.image = NSImage(
+                    systemSymbolName: recording ? "record.circle.fill" : "waveform",
+                    accessibilityDescription: recording ? "Cadence is taking notes" : "Cadence"
+                )
+                self?.notesMenuItem?.title = recording ? "Stop Notes" : "Take Notes"
+            }
         GlobalHotKey.shared.onPress = { AppModel.shared.shortcutPressed() }
         GlobalHotKey.shared.onRelease = { AppModel.shared.shortcutReleased() }
         GlobalHotKey.shared.binding = AppModel.shared.shortcut
         AppModel.shared.refreshPermissions()
+        if notesSmokeTest { Task { @MainActor in await Self.runNotesSmokeTest() } }
+    }
+
+    /// Starts notes, plays both sides of a short exchange through the Mac's
+    /// speakers, stops, and prints the saved lines. Exit status 0 means the
+    /// system-audio tap, the mixer, and the local decoder produced a transcript
+    /// containing both phrases.
+    private static func runNotesSmokeTest() async {
+        let meetings = MeetingNotesModel.shared
+        meetings.startRecording(title: "Smoke test call")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(120))
+        while meetings.session?.phase == .preparing, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard meetings.session?.phase == .recording else {
+            print("smoke: notes did not start: \(meetings.session?.error ?? "unknown reason")")
+            exit(1)
+        }
+        print("smoke: system audio: \(meetings.systemAudioStatus ?? "unknown")")
+        try? await Task.sleep(for: .seconds(1))
+        await speak("Can everyone see the dashboard?")
+        try? await Task.sleep(for: .seconds(2))
+        await speak("Yes, I will route the escalation after this call.")
+        try? await Task.sleep(for: .milliseconds(1_500))
+        meetings.stopRecording()
+        let stopDeadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while meetings.session?.phase != .finished, ContinuousClock.now < stopDeadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let note = meetings.currentNote
+        for line in note?.lines ?? [] { print("smoke: \(line.speaker.title): \(line.text)") }
+        print("smoke: duration: \(note?.duration ?? 0)")
+        let text = (note?.lines.map(\.text).joined(separator: " ") ?? "").lowercased()
+        exit(text.contains("dashboard") && text.contains("escalation") ? 0 : 1)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -239,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Open Cadence", action: #selector(openApp), keyEquivalent: "")
         menu.addItem(withTitle: "Start / Stop Dictation", action: #selector(toggleDictation), keyEquivalent: "")
         menu.addItem(withTitle: "Paste Last Transcript", action: #selector(pasteLast), keyEquivalent: "")
+        notesMenuItem = menu.addItem(withTitle: "Take Notes", action: #selector(toggleNotes), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
@@ -256,6 +317,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleDictation() { AppModel.shared.toggleDictation() }
     @objc private func pasteLast() { AppModel.shared.pasteLastTranscript() }
+    @objc private func toggleNotes() {
+        let meetings = MeetingNotesModel.shared
+        if meetings.isRecording { meetings.stopRecording() } else { meetings.startRecording() }
+    }
     @objc private func openSettings() {
         AppModel.shared.selectedSection = .settings
         openApp()
@@ -376,8 +441,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("smoke: say failed: \(error.localizedDescription)")
             return
         }
+        // A pending privacy prompt can leave `say` waiting forever for its
+        // playback-finished callback; a stuck helper must not stall the test.
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(15))
+            if process.isRunning { process.terminate() }
+        }
         await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in continuation.resume() }
         }
+        watchdog.cancel()
     }
 }

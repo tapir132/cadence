@@ -18,6 +18,7 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 - Reliable standard clipboard pastes instead of lossy synthetic Unicode events
 - Essay-only character delivery with adjustable WPM and Steady, Natural, or Expressive typing rhythms
 - Typer: paste or dictate any text into Cadence, click into a document, press Start, and Cadence types it there at the Essay pace
+- Notes: a live meeting note taker that notices when another app opens the microphone, offers to take notes, and transcribes both sides of the call on this Mac without joining it
 - Optional global music pause for Apple Music and Spotify while Cadence listens
 - Focus-bound delivery that refuses to paste after the user changes windows
 - Personal dictionary spelling, capitalization, and diacritics for names and specialized vocabulary
@@ -35,9 +36,10 @@ Cadence is a native macOS dictation app that transcribes locally and types compl
 
 ## Requirements
 
-- macOS 14 or later
+- macOS 14.2 or later
 - Microphone access
 - Accessibility access for pasting into other applications
+- System Audio Recording access, requested the first time Notes start, so meeting notes include the other side of a call
 
 The optional Pause music setting asks for macOS Automation access only when it first needs to control a running Music or Spotify app.
 
@@ -108,9 +110,15 @@ The application and focused window captured at recording start are checked again
 
 The Typer section holds a plain text box. Paste text into it, or dictate into it with any tool, click into the document that should receive the text, then return to Cadence and press Start. Cadence hides itself so keyboard focus returns to that document and types the text there one complete character at a time using the Essay typing speed and rhythm from Settings. Pressing the dictation shortcut stops it early. The result is verified through Accessibility and saved to the transcript history like a dictation. The rhythms are the same non-personal Steady, Natural, and Expressive profiles; Cadence still does not record or imitate anyone's real keystroke timing or typing mistakes.
 
+## Notes
+
+Cadence polls Core Audio's process list every two seconds. When another app such as Zoom, Google Meet in a browser, Teams, Slack, Discord, or FaceTime starts recording from the microphone, a non-activating **Meeting detected** card appears beside the floating bar. Nothing starts on its own: **Take notes** opens the floating notepad and begins recording, the X snoozes the offer until that call releases the microphone, and the Settings toggle turns the offer off entirely. Notes can also start manually from the Notes section, the menu bar item, or ⌃⌘N for in-person conversations.
+
+While notes run, the microphone and a Core Audio process tap of everything the Mac plays (macOS 14.2+, excluding Cadence itself) are mixed into one stream for the same local Parakeet decoder used for dictation. Words appear live in the Transcript tab and are labeled **You** or **Them** by which side was louder, and the My thoughts tab is a plain editor for your own notes. When notes were started from a detected call, they stop automatically once that app releases the microphone; otherwise the stop control in the notepad ends them. Each meeting is saved as an atomic JSON file in Cadence's Application Support directory and can be copied as Markdown. Cadence never records the screen, and there is no cloud summary: the transcript and your notes are the result.
+
 ## Privacy and security
 
-- Audio is processed locally by the downloaded Parakeet/Core ML model and is not saved by Cadence.
+- Audio is processed locally by the downloaded Parakeet/Core ML model and is not saved by Cadence. Meeting audio is transcribed the same way; only the text is kept.
 - Transcript history and personal dictionary entries are stored locally in the app's user defaults. Snippet bodies are stored as an atomic JSON file in Cadence's Application Support directory.
 - Snippets are plain text and are not an encrypted password vault; do not use them for passwords or other secrets.
 - Cadence does not include analytics, advertising, accounts, or cloud sync.

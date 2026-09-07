@@ -11,6 +11,7 @@ private enum RecognitionSettingsPage: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var meetings: MeetingNotesModel
     @ObservedObject private var updates = UpdateManager.shared
     @State private var recognitionSettingsPage: RecognitionSettingsPage = .profiles
     @State private var bugReportExportMessage: String?
@@ -92,6 +93,40 @@ struct SettingsView: View {
                 sectionTitle("Listening").padding(.top, 34)
                 pauseMusicRow
                     .settingsSurface()
+
+                sectionTitle("Notes").padding(.top, 34)
+                VStack(spacing: 0) {
+                    HStack(spacing: 18) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Offer to take notes when a call starts").font(.system(size: 13, weight: .semibold))
+                            Text("Cadence notices when Zoom, Meet, Teams, FaceTime, or any other app opens your microphone and shows a Meeting detected card beside the floating bar. Notes never start on their own.")
+                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        }
+                        Spacer(minLength: 18)
+                        Toggle("Offer to take notes when a call starts", isOn: $meetings.offersNotesForCalls)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("Offer to take notes when a call starts")
+                    }
+                    .padding(16)
+                    line
+                    HStack(spacing: 18) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("System audio").font(.system(size: 13, weight: .semibold))
+                            Text(meetings.systemAudioStatus ?? "macOS asks for System Audio Recording the first time notes start, so the other side of the call is transcribed too. Cadence never records the screen.")
+                                .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                        }
+                        Spacer(minLength: 18)
+                        Button("Open System Settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(16)
+                }
+                .settingsSurface()
 
                 sectionTitle("Global shortcut").padding(.top, 34)
                 HStack {

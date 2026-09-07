@@ -25,9 +25,11 @@
 	<key>CFBundleVersion</key>
 	<string>102</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>14.2</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Cadence pauses Music or Spotify while you dictate when you enable Pause music.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Cadence captures the other side of a call so meeting notes include what everyone said. Audio never leaves this Mac.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>

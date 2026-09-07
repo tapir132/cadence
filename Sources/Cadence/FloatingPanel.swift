@@ -97,7 +97,8 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let model: AppModel
     private let presentation = FloatingBarPresentation()
     private let snapOverlay = SnapTargetsOverlayController()
-    private let recoveryOverlay: InsertionRecoveryOverlayController
+    private let recoveryOverlay: OverlayCardController
+    private let meetingOverlay: OverlayCardController
     private var cancellables = Set<AnyCancellable>()
     private var isTrackingDrag = false
     private var freeDragWasRequested = false
@@ -106,7 +107,14 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
 
     init(model: AppModel) {
         self.model = model
-        recoveryOverlay = InsertionRecoveryOverlayController(model: model)
+        recoveryOverlay = OverlayCardController(
+            size: NSSize(width: 390, height: 190),
+            content: InsertionRecoveryCard().environmentObject(model)
+        )
+        meetingOverlay = OverlayCardController(
+            size: NSSize(width: 390, height: 132),
+            content: MeetingDetectedCard().environmentObject(MeetingNotesModel.shared)
+        )
         presentation.mode = FloatingBarPresentation.mode(
             state: model.state,
             isHovered: false,
@@ -182,6 +190,18 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
                     recoveryOverlay.hide()
                 } else if let screen = activeScreen {
                     recoveryOverlay.show(near: panel.frame, in: screen.visibleFrame)
+                }
+            }
+            .store(in: &cancellables)
+
+        MeetingNotesModel.shared.$detectedCall
+            .removeDuplicates()
+            .sink { [weak self] call in
+                guard let self else { return }
+                if call == nil {
+                    meetingOverlay.hide()
+                } else if let screen = activeScreen {
+                    meetingOverlay.show(near: panel.frame, in: screen.visibleFrame)
                 }
             }
             .store(in: &cancellables)
@@ -382,47 +402,6 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         return NSSize(width: base.width * scale, height: base.height * scale)
     }
 
-}
-
-@MainActor
-private final class InsertionRecoveryOverlayController {
-    private let panel: NSPanel
-
-    init(model: AppModel) {
-        panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: NSSize(width: 390, height: 190)),
-            styleMask: [.nonactivatingPanel, .borderless],
-            backing: .buffered,
-            defer: false
-        )
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.isFloatingPanel = true
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.hidesOnDeactivate = false
-        panel.contentView = NSHostingView(rootView: InsertionRecoveryCard().environmentObject(model))
-    }
-
-    func show(near floatingFrame: NSRect, in visible: NSRect) {
-        let size = panel.frame.size
-        let preferredBelow = floatingFrame.minY - size.height - 10
-        let preferredAbove = floatingFrame.maxY + 10
-        let y = preferredBelow >= visible.minY ? preferredBelow : min(preferredAbove, visible.maxY - size.height)
-        let origin = SnapGeometry.clamped(
-            NSPoint(x: floatingFrame.midX - size.width / 2, y: y),
-            size: size,
-            in: visible.insetBy(dx: 8, dy: 8)
-        )
-        panel.setFrameOrigin(origin)
-        panel.orderFrontRegardless()
-    }
-
-    func hide() {
-        panel.orderOut(nil)
-    }
 }
 
 private struct InsertionRecoveryCard: View {

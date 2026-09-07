@@ -3,6 +3,7 @@ import SwiftUI
 enum SidebarSection: String, CaseIterable, Identifiable {
     case home = "Home"
     case typer = "Typer"
+    case notes = "Notes"
     case dictionary = "Dictionary"
     case snippets = "Snippets"
     case style = "Style"
@@ -13,6 +14,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         switch self {
         case .home: "rectangle.stack"
         case .typer: "keyboard"
+        case .notes: "text.bubble"
         case .dictionary: "text.book.closed"
         case .snippets: "scissors"
         case .style: "textformat"
@@ -33,6 +35,7 @@ struct RootView: View {
                     switch model.selectedSection {
                     case .home: HomeView()
                     case .typer: TyperView()
+                    case .notes: NotesView()
                     case .dictionary: DictionaryView()
                     case .snippets: SnippetsView()
                     case .style: StyleView()
@@ -94,6 +97,7 @@ struct RootView: View {
 
             sidebarButton(.home)
             sidebarButton(.typer)
+            sidebarButton(.notes)
             sidebarButton(.dictionary)
             sidebarButton(.snippets)
             sidebarButton(.style)
