@@ -118,7 +118,7 @@ struct MeetingNoteView: View {
     private var live: MeetingSession? {
         meetings.session?.noteID == note.id ? meetings.session : nil
     }
-    private var isRecording: Bool { live?.phase == .recording || live?.phase == .preparing }
+    private var isRecording: Bool { live != nil && live?.phase != .finished }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -128,6 +128,12 @@ struct MeetingNoteView: View {
             if let error = live?.error {
                 Text(error)
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(CadenceTheme.coral)
+                    .padding(.horizontal, compact ? 18 : 0).padding(.top, 12)
+            }
+            if let warning = live?.modelWarning {
+                Text(warning)
+                    .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, compact ? 18 : 0).padding(.top, 12)
             }
             if live?.systemAudioUnavailable == true {
@@ -156,12 +162,16 @@ struct MeetingNoteView: View {
                     .tracking(-0.8)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    if isRecording {
+                    if live?.phase == .recording {
                         Circle().fill(CadenceTheme.coral).frame(width: 7, height: 7)
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text(MeetingNote.durationText(context.date.timeIntervalSince(live?.startedAt ?? note.date)))
                         }
-                        Text(live?.phase == .preparing ? "· Loading local model…" : "· Recording")
+                        Text("· Recording")
+                    } else if live?.phase == .preparing {
+                        Text("Preparing…")
+                    } else if live?.phase == .finishing {
+                        Text("Finishing transcript…")
                     } else {
                         Text(note.date.formatted(date: .abbreviated, time: .shortened))
                         Text("· \(MeetingNote.durationText(note.duration))")
@@ -169,6 +179,10 @@ struct MeetingNoteView: View {
                 }
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(CadenceTheme.muted)
+                if isRecording, let live {
+                    Text(live.model.title)
+                        .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                }
             }
             Spacer()
             if isRecording {
@@ -205,9 +219,9 @@ struct MeetingNoteView: View {
             .background(Capsule().fill(CadenceTheme.ink))
         }
         .buttonStyle(.plain)
-        .help("Stop taking notes")
-        .accessibilityLabel("Stop taking notes")
-        .disabled(live?.phase != .recording)
+        .help(live?.phase == .preparing ? "Cancel preparation" : "Stop taking notes")
+        .accessibilityLabel(live?.phase == .preparing ? "Cancel preparation" : "Stop taking notes")
+        .disabled(live?.phase == .finishing)
     }
 
     private var tabs: some View {
@@ -241,7 +255,7 @@ struct MeetingNoteView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if note.lines.isEmpty {
-                        Text(isRecording ? "Listening. Words appear here as people speak." : "Nothing was said while notes were on.")
+                        Text(emptyTranscriptMessage)
                             .font(.system(size: 14)).foregroundStyle(CadenceTheme.muted)
                             .padding(.top, 8)
                     }
@@ -268,10 +282,19 @@ struct MeetingNoteView: View {
                 .padding(.horizontal, compact ? 18 : 0)
                 .padding(.vertical, 14)
             }
-            .onChange(of: note.lines.last?.text) { _, _ in
+            .onChange(of: note.lines) { _, _ in
                 guard isRecording else { return }
                 proxy.scrollTo("end", anchor: .bottom)
             }
+        }
+    }
+
+    private var emptyTranscriptMessage: String {
+        switch live?.phase {
+        case .preparing: meetings.preparationDescription + " Recording starts when they are ready."
+        case .recording: "Listening. Words appear here as people speak."
+        case .finishing: "Finishing the last words…"
+        case .finished, nil: "Nothing was said while notes were on."
         }
     }
 
@@ -357,8 +380,9 @@ private struct MeetingNotepadView: View {
                 MeetingNoteView(note: note, compact: true)
                     .id(note.id)
             } else {
-                Text("No notes are being taken.")
+                Text(meetings.session?.error ?? "No notes are being taken.")
                     .font(.system(size: 12)).foregroundStyle(CadenceTheme.muted)
+                    .padding(18)
             }
         }
         .frame(minWidth: 340, minHeight: 320)
@@ -398,6 +422,8 @@ struct NotesView: View {
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 12)
+            MeetingModelPicker()
+                .padding(.top, 20)
             Button {
                 if meetings.isRecording {
                     meetings.isNotepadVisible = true
@@ -411,6 +437,18 @@ struct NotesView: View {
             .tint(meetings.isRecording ? CadenceTheme.coral : CadenceTheme.ink)
             .controlSize(.large)
             .padding(.top, 22)
+
+            if meetings.session?.phase == .preparing {
+                Text(meetings.preparationDescription)
+                    .font(.system(size: 11)).foregroundStyle(CadenceTheme.muted)
+                    .padding(.top, 10)
+            }
+            if let error = meetings.session?.error {
+                Text(error)
+                    .font(.system(size: 11)).foregroundStyle(CadenceTheme.coral)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
+            }
 
             if meetings.notes.isEmpty {
                 Text("Your first meeting will land here.")
@@ -471,6 +509,7 @@ struct NotesView: View {
                             Label("Delete", systemImage: "trash").font(.system(size: 11, weight: .semibold))
                         }
                         .buttonStyle(.bordered)
+                        .disabled(meetings.isRecording && meetings.session?.noteID == note.id)
                     }
                     .padding(.top, 10)
                 }

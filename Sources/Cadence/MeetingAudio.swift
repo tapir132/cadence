@@ -131,7 +131,7 @@ enum SystemAudioTapError: LocalizedError {
     }
 }
 
-/// Captures everything the Mac plays, except Cadence itself, through a Core
+/// Captures everything the Mac plays through a Core
 /// Audio process tap (macOS 14.2+). Unlike ScreenCaptureKit this needs only the
 /// "System Audio Recording Only" grant, which macOS asks for on first use, and
 /// no screen-recording permission. The tap is attached to a private aggregate
@@ -143,7 +143,7 @@ final class SystemAudioTap: @unchecked Sendable {
     private let queue = DispatchQueue(label: "app.cadence.system-audio-tap")
 
     /// Delivers 16 kHz mono chunks to `onSamples` from the tap's own queue.
-    func start(onSamples: @escaping @Sendable ([Float]) -> Void) throws {
+    func start(onSamples: @escaping @Sendable (CapturedAudioChunk) -> Void) throws {
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
         description.uuid = UUID()
         description.name = "Cadence Notes"
@@ -201,7 +201,7 @@ final class SystemAudioTap: @unchecked Sendable {
         let channels = Int(tapFormat.channelCount)
         let interleaved = tapFormat.isInterleaved
 
-        status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, input, _, _, _ in
+        status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, input, inputTime, _, _ in
             let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
             guard let first = buffers.first, let data = first.mData else { return }
             let frames = Int(first.mDataByteSize) / MemoryLayout<Float>.size / (interleaved ? max(channels, 1) : 1)
@@ -236,7 +236,12 @@ final class SystemAudioTap: @unchecked Sendable {
                 provider.provide(outStatus: inputStatus)
             }
             guard result != .error, let channel = output.floatChannelData?.pointee, output.frameLength > 0 else { return }
-            onSamples(Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength))))
+            let samples = Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength)))
+            let timestamp = inputTime.pointee
+            let startTime = timestamp.mFlags.contains(.hostTimeValid)
+                ? AVAudioTime.seconds(forHostTime: timestamp.mHostTime)
+                : ProcessInfo.processInfo.systemUptime - Double(samples.count) / 16_000
+            onSamples(CapturedAudioChunk(samples: samples, startTime: startTime))
         }
         guard status == noErr else {
             stop()
@@ -268,131 +273,67 @@ final class SystemAudioTap: @unchecked Sendable {
     deinit { stop() }
 }
 
-/// Sums the microphone and the system tap into one 16 kHz stream for the
-/// decoder and remembers which side has been louder lately, which is how a
-/// finished phrase gets labeled You or Them.
-/// ponytail: energy dominance, not diarization. Two decoders (one per source)
-/// would label perfectly at twice the model memory.
-struct MeetingAudioMixer: Sendable {
-    static let frameSize = 1_600 // 100 ms at 16 kHz
-    private static let maxBacklog = frameSize * 8
-
-    private var microphone: [Float] = []
-    private var system: [Float] = []
-    private(set) var microphoneEnergy: Float = 0
-    private(set) var systemEnergy: Float = 0
-
-    var dominantSpeaker: MeetingSpeaker {
-        systemEnergy > microphoneEnergy ? .them : .you
-    }
-
-    /// Returns any mixed frames that became complete after this push.
-    mutating func push(_ source: MeetingSpeaker, _ samples: [Float]) -> [[Float]] {
-        switch source {
-        case .you: microphone.append(contentsOf: samples)
-        case .them: system.append(contentsOf: samples)
-        }
-        var frames: [[Float]] = []
-        while microphone.count >= Self.frameSize, system.count >= Self.frameSize {
-            frames.append(mix(Array(microphone.prefix(Self.frameSize)), Array(system.prefix(Self.frameSize))))
-            microphone.removeFirst(Self.frameSize)
-            system.removeFirst(Self.frameSize)
-        }
-        // One side has gone quiet or missing (no tap permission, an unplugged
-        // mic). Never hold the other side's speech hostage waiting for it.
-        while microphone.count >= Self.maxBacklog, system.isEmpty {
-            frames.append(mix(Array(microphone.prefix(Self.frameSize)), []))
-            microphone.removeFirst(Self.frameSize)
-        }
-        while system.count >= Self.maxBacklog, microphone.isEmpty {
-            frames.append(mix([], Array(system.prefix(Self.frameSize))))
-            system.removeFirst(Self.frameSize)
-        }
-        return frames
-    }
-
-    private mutating func mix(_ mic: [Float], _ sys: [Float]) -> [Float] {
-        let smoothing: Float = 0.6
-        microphoneEnergy = microphoneEnergy * smoothing + Self.rms(mic) * (1 - smoothing)
-        systemEnergy = systemEnergy * smoothing + Self.rms(sys) * (1 - smoothing)
-        let count = max(mic.count, sys.count)
-        var mixed = [Float](repeating: 0, count: count)
-        for index in 0..<count {
-            let value = (index < mic.count ? mic[index] : 0) + (index < sys.count ? sys[index] : 0)
-            mixed[index] = min(max(value, -1), 1)
-        }
-        return mixed
-    }
-
-    private static func rms(_ samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0 }
-        var sum: Float = 0
-        for sample in samples { sum += sample * sample }
-        return sqrt(sum / Float(samples.count))
-    }
+/// Each input retains its identity and timing through recognition. The mic's
+/// echo stage has a bounded reference wait; missing system audio cannot stall it.
+struct MeetingAudioStreams: Sendable {
+    let microphone: AsyncStream<CapturedAudioChunk>
+    let system: AsyncStream<CapturedAudioChunk>
 }
 
-/// Runs the microphone engine and the system tap together and exposes one
-/// ordered AsyncStream for `LiveSpeechTranscriber`, plus the live speaker guess.
 final class MeetingAudioSource: @unchecked Sendable {
     private let microphone = AudioCaptureEngine()
     private let tap = SystemAudioTap()
-    private let lock = NSLock()
-    private var mixer = MeetingAudioMixer()
-    private var continuation: AsyncStream<[Float]>.Continuation?
-    private var microphoneTask: Task<Void, Never>?
+    private var systemContinuation: AsyncStream<CapturedAudioChunk>.Continuation?
+    private var microphoneForwarder: Task<Void, Never>?
+    private var echoStream: MeetingEchoStream?
     private(set) var systemAudioError: Error?
 
-    var dominantSpeaker: MeetingSpeaker {
-        lock.lock()
-        defer { lock.unlock() }
-        return mixer.dominantSpeaker
-    }
-
-    func start(onLevel: @escaping @Sendable (Float) -> Void) throws -> AsyncStream<[Float]> {
-        let microphoneStream = try microphone.start(onLevel: onLevel)
-        var streamContinuation: AsyncStream<[Float]>.Continuation?
-        let stream = AsyncStream<[Float]>(bufferingPolicy: .unbounded) { streamContinuation = $0 }
-        lock.lock()
-        continuation = streamContinuation
-        lock.unlock()
-
+    func start(onLevel: @escaping @Sendable (Float) -> Void) throws -> MeetingAudioStreams {
+        systemAudioError = nil
+        let (microphoneStream, micOutput) = AsyncStream<CapturedAudioChunk>.makeStream()
+        let echo = try MeetingEchoStream(output: micOutput, onLevel: onLevel)
+        echoStream = echo
+        let rawMicrophone: AsyncStream<CapturedAudioChunk>
         do {
-            // Diagnostic: `CADENCE_NOTES_MICROPHONE_ONLY=1` skips the system tap
-            // (and its one-time permission prompt) to exercise the rest alone.
+            rawMicrophone = try microphone.startTimestamped(onLevel: { _ in })
+        } catch {
+            echo.finish()
+            echoStream = nil
+            throw error
+        }
+        microphoneForwarder = Task.detached(priority: .userInitiated) {
+            for await chunk in rawMicrophone { echo.appendMicrophone(chunk) }
+            echo.finish()
+        }
+        let (system, continuation) = AsyncStream<CapturedAudioChunk>.makeStream(bufferingPolicy: .unbounded)
+        systemContinuation = continuation
+        do {
+            // Diagnostic: skip the tap to exercise the microphone-only fallback.
             if ProcessInfo.processInfo.environment["CADENCE_NOTES_MICROPHONE_ONLY"] == "1" {
                 throw SystemAudioTapError.status("skipped by CADENCE_NOTES_MICROPHONE_ONLY", 0)
             }
-            try tap.start { [weak self] samples in self?.push(.them, samples) }
+            try tap.start { chunk in
+                echo.appendPlayback(chunk)
+                continuation.yield(chunk)
+            }
         } catch {
+            echo.endPlayback()
             systemAudioError = error
+            continuation.finish()
             NSLog("Cadence Notes is recording without system audio: %@", error.localizedDescription)
         }
-        microphoneTask = Task { [weak self] in
-            for await samples in microphoneStream { self?.push(.you, samples) }
-            self?.finishStream()
-        }
-        return stream
+        return MeetingAudioStreams(microphone: microphoneStream, system: system)
     }
 
     func finish() {
         tap.stop()
+        echoStream?.endPlayback()
+        systemContinuation?.finish()
+        systemContinuation = nil
         microphone.finish()
-    }
-
-    private func push(_ source: MeetingSpeaker, _ samples: [Float]) {
-        lock.lock()
-        let frames = mixer.push(source, samples)
-        let active = continuation
-        lock.unlock()
-        for frame in frames { active?.yield(frame) }
-    }
-
-    private func finishStream() {
-        lock.lock()
-        let active = continuation
-        continuation = nil
-        lock.unlock()
-        active?.finish()
+        // The forwarder drains the microphone stream and then finishes echo
+        // processing, including a final partial frame, before its output ends.
+        microphoneForwarder = nil
+        echoStream = nil
     }
 }

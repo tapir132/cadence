@@ -7,7 +7,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 
 cd "$PROJECT_DIR"
 "$PROJECT_DIR/scripts/generate-icon.sh" >/dev/null
-swift build -c release
+swift build -c release -Xswiftc -warnings-as-errors -Xcc -Werror
 
 if [[ "$APP_DIR" != "$PROJECT_DIR/dist/Cadence.app" ]]; then
   echo "Refusing to clean an unexpected app bundle path" >&2
@@ -18,6 +18,7 @@ mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources" "$CONTENTS_DIR/Framewor
 cp ".build/release/Cadence" "$CONTENTS_DIR/MacOS/Cadence"
 cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "Resources/Cadence.icns" "$CONTENTS_DIR/Resources/Cadence.icns"
+cat "Sources/CSpeexDSP/COPYING" "Sources/CSpeexDSP/NOTICES" > "$CONTENTS_DIR/Resources/SpeexDSP-LICENSE.txt"
 
 # A local build shares its bundle identifier and update preferences with the
 # installed copy, so its numeric build number decides whether Sparkle offers

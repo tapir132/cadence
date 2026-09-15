@@ -454,6 +454,32 @@ actor LiveSpeechTranscriber {
         }
         return buffer
     }
+
+    /// Notes have revisable utterances, unlike text already typed into another
+    /// app. Each call uses its own prepared decoder and VAD state.
+    func transcribeMeeting(
+        _ audio: AsyncStream<CapturedAudioChunk>,
+        speaker: MeetingSpeaker,
+        refinementQueue: MeetingRefinementQueue? = nil,
+        onFallback: @escaping @Sendable () async -> Void = {},
+        onUpdate: @escaping @Sendable (MeetingTranscriptUpdate) async -> Void
+    ) async throws {
+        guard let manager, let vad else {
+            throw SpeechEngineError.modelUnavailable("Model preparation has not finished.")
+        }
+        let channel = MeetingChannelRecognizer(
+            manager: manager, vad: vad, speaker: speaker,
+            refinementQueue: refinementQueue, onFallback: onFallback
+        )
+        try await channel.transcribe(audio, onUpdate: onUpdate)
+    }
+}
+
+/// The first sample's monotonic capture time, shared by the microphone and
+/// Core Audio tap. Decoder latency must never determine conversation order.
+struct CapturedAudioChunk: Sendable {
+    let samples: [Float]
+    let startTime: TimeInterval
 }
 
 /// Captures microphone input and yields ordered 16 kHz mono Float32 chunks.
@@ -462,7 +488,9 @@ actor LiveSpeechTranscriber {
 final class AudioCaptureEngine: @unchecked Sendable {
     private static let sampleRate = 16_000.0
 
-    private var audioEngine = AVAudioEngine()
+    private let audioEngine: AVAudioEngine
+    private let controlQueue = DispatchQueue(label: "app.cadence.microphone-control")
+    private var configurationObserver: NSObjectProtocol?
     private var converter: AVAudioConverter?
     private var converterInputFormat: AVAudioFormat?
     private var manuallyMixInputToMono = false
@@ -471,6 +499,15 @@ final class AudioCaptureEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var onLevel: (@Sendable (Float) -> Void)?
     private var continuation: AsyncStream<[Float]>.Continuation?
+    private var timestampedContinuation: AsyncStream<CapturedAudioChunk>.Continuation?
+
+    init(audioEngine: AVAudioEngine = AVAudioEngine()) {
+        self.audioEngine = audioEngine
+    }
+
+    deinit {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+    }
 
     static var microphoneAuthorized: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -481,9 +518,31 @@ final class AudioCaptureEngine: @unchecked Sendable {
     }
 
     func start(onLevel: @escaping @Sendable (Float) -> Void) throws -> AsyncStream<[Float]> {
-        guard Self.microphoneAuthorized else { throw SpeechEngineError.permissions }
-        cancel()
+        try controlQueue.sync {
+            guard Self.microphoneAuthorized else { throw SpeechEngineError.permissions }
+            stopCapture()
+            let (stream, continuation) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
+            self.continuation = continuation
+            try beginCapture(onLevel: onLevel)
+            return stream
+        }
+    }
 
+    func startTimestamped(onLevel: @escaping @Sendable (Float) -> Void) throws -> AsyncStream<CapturedAudioChunk> {
+        try controlQueue.sync {
+            guard Self.microphoneAuthorized else { throw SpeechEngineError.permissions }
+            stopCapture()
+            let (stream, continuation) = AsyncStream<CapturedAudioChunk>.makeStream(bufferingPolicy: .unbounded)
+            timestampedContinuation = continuation
+            try beginCapture(onLevel: onLevel)
+            return stream
+        }
+    }
+
+    private func beginCapture(onLevel: @escaping @Sendable (Float) -> Void) throws {
+        var started = false
+        defer { if !started { stopCapture() } }
+        observeConfigurationChanges()
         let input = audioEngine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0,
@@ -500,46 +559,60 @@ final class AudioCaptureEngine: @unchecked Sendable {
             throw SpeechEngineError.noInput
         }
 
-        var streamContinuation: AsyncStream<[Float]>.Continuation?
-        let stream = AsyncStream<[Float]>(bufferingPolicy: .unbounded) { continuation in
-            streamContinuation = continuation
-        }
-        guard let streamContinuation else { throw SpeechEngineError.noInput }
-
         lock.lock()
         recordingGeneration &+= 1
         self.converter = converter
         converterInputFormat = sourceFormat
         manuallyMixInputToMono = mixToMono
         self.onLevel = onLevel
-        continuation = streamContinuation
         isRecording = true
         let generation = recordingGeneration
         lock.unlock()
 
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4_096, format: inputFormat) { [weak self] buffer, _ in
-            self?.consume(buffer, targetFormat: targetFormat, generation: generation)
+        input.installTap(onBus: 0, bufferSize: 4_096, format: inputFormat) { [weak self] buffer, time in
+            self?.consume(buffer, at: time, targetFormat: targetFormat, generation: generation)
         }
 
         audioEngine.prepare()
-        do {
-            try audioEngine.start()
-            return stream
-        } catch {
-            cancel()
-            throw error
-        }
+        try audioEngine.start()
+        started = true
     }
 
     func finish() {
+        controlQueue.sync { stopCapture() }
+    }
+
+    func cancel() {
+        controlQueue.sync { stopCapture() }
+    }
+
+    private func stopCapture() {
         stopAudioEngine()
         endStream()
     }
 
-    func cancel() {
-        stopAudioEngine()
-        endStream()
+    private func observeConfigurationChanges() {
+        guard configurationObserver == nil else { return }
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: audioEngine, queue: nil
+        ) { [weak self] _ in
+            self?.controlQueue.async { [weak self] in self?.resumeAfterConfigurationChange() }
+        }
+    }
+
+    /// Bluetooth profile changes can stop the engine after start() succeeded,
+    /// including before the very first tap callback. Rebuild the converter and
+    /// tap for the current hardware format, preserving the consumer's stream.
+    private func resumeAfterConfigurationChange() {
+        let levelHandler = lock.withLock { isRecording ? onLevel : nil }
+        guard let levelHandler, !audioEngine.isRunning else { return }
+        do {
+            try beginCapture(onLevel: levelHandler)
+            NSLog("Cadence resumed microphone capture after an audio configuration change.")
+        } catch {
+            NSLog("Cadence could not resume microphone capture: %@", error.localizedDescription)
+        }
     }
 
     private func endStream() {
@@ -547,13 +620,16 @@ final class AudioCaptureEngine: @unchecked Sendable {
         isRecording = false
         recordingGeneration &+= 1
         let activeContinuation = continuation
+        let activeTimestampedContinuation = timestampedContinuation
         continuation = nil
+        timestampedContinuation = nil
         converter = nil
         converterInputFormat = nil
         manuallyMixInputToMono = false
         onLevel = nil
         lock.unlock()
         activeContinuation?.finish()
+        activeTimestampedContinuation?.finish()
     }
 
     private func stopAudioEngine() {
@@ -563,6 +639,7 @@ final class AudioCaptureEngine: @unchecked Sendable {
 
     private func consume(
         _ buffer: AVAudioPCMBuffer,
+        at time: AVAudioTime,
         targetFormat: AVAudioFormat,
         generation: UInt64
     ) {
@@ -602,8 +679,13 @@ final class AudioCaptureEngine: @unchecked Sendable {
         }
         let levelHandler = onLevel
         let activeContinuation = continuation
+        let activeTimestampedContinuation = timestampedContinuation
         lock.unlock()
         activeContinuation?.yield(converted)
+        let startTime = time.isHostTimeValid
+            ? AVAudioTime.seconds(forHostTime: time.hostTime)
+            : ProcessInfo.processInfo.systemUptime - Double(frameCount) / Self.sampleRate
+        activeTimestampedContinuation?.yield(CapturedAudioChunk(samples: converted, startTime: startTime))
         levelHandler?(level)
     }
 

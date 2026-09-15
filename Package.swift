@@ -15,9 +15,21 @@ let package = Package(
         )
     ],
     targets: [
+        .target(
+            name: "CSpeexDSP",
+            path: "Sources/CSpeexDSP",
+            exclude: ["COPYING", "NOTICES", "README.md"],
+            sources: ["mdf.c", "fftwrap.c", "smallft.c"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("HAVE_CONFIG_H"), .define("FLOATING_POINT"),
+                .define("USE_SMALLFT"), .define("EXPORT", to: "")
+            ]
+        ),
         .executableTarget(
             name: "Cadence",
             dependencies: [
+                "CSpeexDSP",
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "FluidAudio", package: "FluidAudio")
             ],

@@ -176,8 +176,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var notesMenuItem: NSMenuItem?
     private var recordingObserver: AnyCancellable?
+    private var meetingPreparationObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"] == "notes-capture" {
+            NSApp.setActivationPolicy(.prohibited)
+            Task { exit(await MeetingCaptureSmokeTest.run() ? 0 : 1) }
+            return
+        }
         // Release smoke test: `CADENCE_SMOKE_TEST=1 Cadence.app/Contents/MacOS/Cadence`
         // dictates through the Mac's own speakers and microphone into a scratch
         // TextEdit document and reports what the editor received.
@@ -222,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         floatingPanel = FloatingPanelController(model: AppModel.shared)
         notepad = MeetingNotepadWindowController(meetings: MeetingNotesModel.shared)
+        meetingPreparationObserver = AppModel.shared.$speechModelStatus
+            .filter { $0 == .ready }
+            .first()
+            .sink { _ in MeetingNotesModel.shared.prepareForMeetings() }
         configureStatusItem()
         recordingObserver = MeetingNotesModel.shared.$session
             .map { $0?.phase == .recording || $0?.phase == .preparing }
@@ -242,8 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Starts notes, plays both sides of a short exchange through the Mac's
     /// speakers, stops, and prints the saved lines. Exit status 0 means the
-    /// system-audio tap, the mixer, and the local decoder produced a transcript
-    /// containing both phrases.
+    /// system-audio tap and local decoders produced both phrases. Playback
+    /// through speakers alone does not verify local/remote speaker separation.
     private static func runNotesSmokeTest() async {
         let meetings = MeetingNotesModel.shared
         meetings.startRecording(title: "Smoke test call")

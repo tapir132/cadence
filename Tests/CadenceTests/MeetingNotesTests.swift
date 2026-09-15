@@ -2,45 +2,49 @@ import Foundation
 import Testing
 @testable import Cadence
 
-@Test func mixerSumsAlignedFramesAndTracksTheLouderSide() {
-    var mixer = MeetingAudioMixer()
-    let frame = MeetingAudioMixer.frameSize
-    #expect(mixer.push(.you, [Float](repeating: 0.1, count: frame)).isEmpty)
-    let mixed = mixer.push(.them, [Float](repeating: 0.5, count: frame))
-    #expect(mixed.count == 1)
-    #expect(mixed[0].count == frame)
-    #expect(abs(mixed[0][0] - 0.6) < 0.0001)
-    #expect(mixer.dominantSpeaker == .them)
-
-    _ = mixer.push(.them, [Float](repeating: 0, count: frame * 3))
-    for _ in 0..<3 { _ = mixer.push(.you, [Float](repeating: 0.4, count: frame)) }
-    #expect(mixer.dominantSpeaker == .you)
-}
-
-@Test func mixerReleasesOneSideWhenTheOtherIsSilentForTooLong() {
-    var mixer = MeetingAudioMixer()
-    let frame = MeetingAudioMixer.frameSize
-    var frames: [[Float]] = []
-    for _ in 0..<7 { frames += mixer.push(.you, [Float](repeating: 0.2, count: frame)) }
-    #expect(frames.isEmpty)
-    frames += mixer.push(.you, [Float](repeating: 0.2, count: frame))
-    #expect(frames.count == 1)
-    #expect(frames[0].allSatisfy { abs($0 - 0.2) < 0.0001 })
-    #expect(mixer.dominantSpeaker == .you)
-}
-
-@Test func noteGroupsConsecutiveWordsBySpeakerAndRetractsPeriods() {
-    var note = MeetingNote(id: UUID(), date: .now, title: "Zoom call", duration: 0, lines: [], thoughts: "")
-    note.append("Can everyone ", deleteBackward: 0, speaker: .them)
-    note.append("see the dashboard?", deleteBackward: 0, speaker: .them)
-    note.append("Yes.", deleteBackward: 0, speaker: .you)
-    note.append(" I can", deleteBackward: 1, speaker: .you)
-    #expect(note.lines.map(\.text) == ["Can everyone see the dashboard?", "Yes I can"])
-    note.append(" ", deleteBackward: 0, speaker: .them)
-    #expect(note.lines.count == 2)
+/// Previously, delayed words used the current mixer energy and split a
+/// remote sentence into Them/You. Now the originating turn owns every revision.
+@Test func delayedRemoteWordsDoNotSwitchToTheMicrophoneSpeaker() {
+    var note = MeetingNote(id: UUID(), date: .now, title: "Call", duration: 0, lines: [], thoughts: "")
+    let remote = UUID()
+    note.apply(MeetingTranscriptUpdate(id: remote, speaker: .them, startTime: 1, text: "Can everyone"))
+    note.apply(MeetingTranscriptUpdate(id: UUID(), speaker: .you, startTime: 2, text: "Yes."))
+    note.apply(MeetingTranscriptUpdate(id: remote, speaker: .them, startTime: 1, text: "Can everyone see the dashboard?"))
     #expect(note.lines.map(\.speaker) == [.them, .you])
+    #expect(note.lines.map(\.text) == ["Can everyone see the dashboard?", "Yes."])
     #expect(note.markdown.contains("**Them:** Can everyone see the dashboard?"))
-    #expect(note.markdown.contains("**You:** Yes I can"))
+}
+
+@Test func overlappingTurnsUseCaptureOrderAndKeepCorrectionsOnTheirOwnLine() {
+    var note = MeetingNote(id: UUID(), date: .now, title: "Call", duration: 0, lines: [], thoughts: "")
+    let you = UUID()
+    let them = UUID()
+    note.apply(MeetingTranscriptUpdate(id: you, speaker: .you, startTime: 3, text: "Yes."))
+    // The earlier remote turn arrives after the reply's first hypothesis.
+    note.apply(MeetingTranscriptUpdate(id: them, speaker: .them, startTime: 1, text: "Look at the bored"))
+    note.apply(MeetingTranscriptUpdate(id: you, speaker: .you, startTime: 3, text: "Yes, I can."))
+    note.apply(MeetingTranscriptUpdate(id: them, speaker: .them, startTime: 1, text: "Look at the board."))
+    #expect(note.lines.map(\.id) == [them, you])
+    #expect(note.lines.map(\.text) == ["Look at the board.", "Yes, I can."])
+    note.apply(MeetingTranscriptUpdate(id: UUID(), speaker: .them, startTime: 8, text: " "))
+    #expect(note.lines.count == 2)
+    note.apply(MeetingTranscriptUpdate(id: them, speaker: .them, startTime: 1, text: ""))
+    #expect(note.lines.map(\.id) == [you])
+}
+
+@Test func timestampedMeetingNotesRoundTripAndOldNotesStillLoad() throws {
+    let oldJSON = #"{"id":"00000000-0000-0000-0000-000000000001","speaker":"you","text":"Old note."}"#
+    let oldLine = try JSONDecoder().decode(MeetingLine.self, from: Data(oldJSON.utf8))
+    #expect(oldLine.startTime == nil)
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("cadence-note-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = MeetingNoteStore(fileURL: directory.appendingPathComponent("meetings.json"))
+    var note = MeetingNote(id: UUID(), date: .now, title: "Call", duration: 10, lines: [], thoughts: "")
+    note.apply(MeetingTranscriptUpdate(id: UUID(), speaker: .them, startTime: 1, text: "First sentence."))
+    note.apply(MeetingTranscriptUpdate(id: UUID(), speaker: .you, startTime: 2, text: "My reply."))
+    store.save([note])
+    #expect(store.load() == [note])
+    #expect(store.load().first?.markdown == note.markdown)
 }
 
 @Test func onlyKnownCallAppsInOtherProcessesCountAsACall() {

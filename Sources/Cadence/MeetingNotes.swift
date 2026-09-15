@@ -5,6 +5,7 @@ struct MeetingLine: Identifiable, Codable, Equatable {
     var id = UUID()
     var speaker: MeetingSpeaker
     var text: String
+    var startTime: TimeInterval? = nil
 }
 
 struct MeetingNote: Identifiable, Codable, Equatable {
@@ -35,20 +36,18 @@ struct MeetingNote: Identifiable, Codable, Equatable {
             : String(format: "%d:%02d", total / 60, total % 60)
     }
 
-    /// Appends the decoder's next append-only word delta to the transcript,
-    /// starting a new line whenever the louder side of the call changes.
-    mutating func append(_ insertion: String, deleteBackward: Int, speaker: MeetingSpeaker) {
-        if deleteBackward > 0, let last = lines.indices.last {
-            lines[last].text = String(lines[last].text.dropLast(deleteBackward))
+    /// Apply a complete hypothesis to its original turn, preserving source
+    /// identity and capture order when the two recognizers finish out of order.
+    mutating func apply(_ update: MeetingTranscriptUpdate) {
+        let text = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let index = lines.firstIndex(where: { $0.id == update.id }) {
+            if text.isEmpty { lines.remove(at: index) } else { lines[index].text = text }
+            return
         }
-        // Deltas carry their own spacing ("Can everyone ", "see"), so keep the
-        // text raw and only drop the leading space of a brand-new line.
-        guard insertion.contains(where: { !$0.isWhitespace }) else { return }
-        if let last = lines.indices.last, lines[last].speaker == speaker {
-            lines[last].text += insertion
-        } else {
-            lines.append(MeetingLine(speaker: speaker, text: String(insertion.drop(while: \.isWhitespace))))
-        }
+        guard !text.isEmpty else { return }
+        let line = MeetingLine(id: update.id, speaker: update.speaker, text: text, startTime: update.startTime)
+        let index = lines.firstIndex { ($0.startTime ?? -.infinity) > update.startTime } ?? lines.endIndex
+        lines.insert(line, at: index)
     }
 }
 
@@ -88,16 +87,19 @@ struct DetectedCall: Equatable {
 enum MeetingSessionPhase: Equatable {
     case preparing
     case recording
+    case finishing
     case finished
 }
 
 struct MeetingSession: Equatable {
     let noteID: UUID
-    let startedAt: Date
+    var startedAt: Date
     let startedFromCall: Bool
     var phase: MeetingSessionPhase
     var systemAudioUnavailable = false
     var error: String?
+    var model: MeetingRecognitionModel = .parakeet
+    var modelWarning: String?
 }
 
 /// The live note taker: notices when another app opens the microphone, offers
@@ -110,6 +112,9 @@ final class MeetingNotesModel: ObservableObject {
     @Published private(set) var session: MeetingSession?
     @Published private(set) var notes: [MeetingNote]
     @Published private(set) var audioLevel: Float = 0
+    @Published private(set) var recognitionModel: MeetingRecognitionModel
+    @Published private(set) var preparationUpdate: SpeechModelPreparationUpdate?
+    @Published private(set) var modelSetup = MeetingModelSetup()
     @Published var isNotepadVisible = false
     @Published var offersNotesForCalls: Bool {
         didSet { UserDefaults.standard.set(offersNotesForCalls, forKey: "offersNotesForCalls") }
@@ -119,19 +124,42 @@ final class MeetingNotesModel: ObservableObject {
     @Published private(set) var systemAudioStatus: String?
 
     private let store: MeetingNoteStore
-    private let transcriber = LiveSpeechTranscriber()
+    private let defaults: UserDefaults
+    private let transcriber: MeetingTranscriber
+    private let modelPreparation: MeetingModelPreparation
+    private var hasStartedSetup = false
     private var source: MeetingAudioSource?
     private var transcriptionTask: Task<Void, Never>?
     private var pollTimer: Timer?
     private var snoozedCall = false
     private var quietCallPolls = 0
 
-    var isRecording: Bool { session?.phase == .recording || session?.phase == .preparing }
+    var isRecording: Bool { session != nil && session?.phase != .finished }
     var currentNote: MeetingNote? { session.flatMap { session in notes.first { $0.id == session.noteID } } }
 
-    init(store: MeetingNoteStore = MeetingNoteStore(), polls: Bool = true) {
+    var preparationDescription: String {
+        guard let preparationUpdate else { return "Preparing local transcription…" }
+        switch preparationUpdate.phase {
+        case .loading: return "Loading local speech models…"
+        case .downloading:
+            if let progress = preparationUpdate.progress {
+                return "Downloading speech models · \(Int(progress * 100))%"
+            }
+            return "Downloading speech models…"
+        }
+    }
+
+    init(store: MeetingNoteStore = MeetingNoteStore(), polls: Bool = true, defaults: UserDefaults = .standard) {
+        let transcriber = MeetingTranscriber()
+        self.transcriber = transcriber
+        modelPreparation = MeetingModelPreparation(
+            prepareLive: { progress in try await transcriber.prepareLive(onProgress: progress) },
+            prepareCohere: { progress in try await transcriber.prepareCohere(onProgress: progress) }
+        )
         self.store = store
+        self.defaults = defaults
         notes = store.load()
+        recognitionModel = MeetingRecognitionModel.load(from: defaults)
         offersNotesForCalls = UserDefaults.standard.object(forKey: "offersNotesForCalls") as? Bool ?? true
         guard polls else { return }
         // ponytail: a 2 s poll of Core Audio's process list; property listeners
@@ -139,6 +167,24 @@ final class MeetingNotesModel: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
+    }
+
+    func selectRecognitionModel(_ model: MeetingRecognitionModel) {
+        guard !isRecording, model.isSupported else { return }
+        recognitionModel = model
+        defaults.set(model.rawValue, forKey: MeetingRecognitionModel.preferenceKey)
+        if hasStartedSetup { prepareForMeetings() }
+    }
+
+    /// Called after the app's initial dictation download finishes, avoiding
+    /// concurrent installers writing the shared Parakeet model files.
+    func prepareForMeetings() {
+        hasStartedSetup = true
+        modelPreparation.onChange = { [weak self] setup in
+            self?.modelSetup = setup
+            if case let .preparing(update) = setup.live { self?.preparationUpdate = update }
+        }
+        modelPreparation.start(for: recognitionModel)
     }
 
     func poll(users: [MicrophoneUser]? = nil) {
@@ -178,6 +224,8 @@ final class MeetingNotesModel: ObservableObject {
         let note = MeetingNote(id: UUID(), date: Date(), title: title, duration: 0, lines: [], thoughts: "")
         notes.insert(note, at: 0)
         session = MeetingSession(noteID: note.id, startedAt: note.date, startedFromCall: fromCall, phase: .preparing)
+        session?.model = recognitionModel
+        preparationUpdate = nil
         quietCallPolls = 0
         isNotepadVisible = true
         transcriptionTask?.cancel()
@@ -185,9 +233,19 @@ final class MeetingNotesModel: ObservableObject {
     }
 
     func stopRecording() {
-        guard let session, session.phase == .recording else { return }
-        source?.finish()
-        audioLevel = 0
+        guard let session else { return }
+        switch session.phase {
+        case .preparing:
+            transcriptionTask?.cancel()
+            // Model setup belongs to the app and keeps running for the next
+            // call. Cancelling a pending note must not throw away that work.
+            finish(noteID: session.noteID)
+        case .recording:
+            source?.finish()
+            markFinishing(noteID: session.noteID)
+        case .finishing, .finished:
+            break
+        }
     }
 
     func updateThoughts(_ text: String, for noteID: UUID) {
@@ -208,24 +266,38 @@ final class MeetingNotesModel: ObservableObject {
     }
 
     private func record(noteID: UUID) async {
+        guard let activeSession = session, activeSession.noteID == noteID else { return }
+        let transcriber = transcriber
         var microphoneAllowed = AudioCaptureEngine.microphoneAuthorized
         if !microphoneAllowed { microphoneAllowed = await AudioCaptureEngine.requestPermissions() }
+        guard !Task.isCancelled else { return }
         guard microphoneAllowed else {
             fail("Microphone access is required.", noteID: noteID)
             return
         }
         do {
-            // A transcript is read later, not typed live, so spend the extra
-            // context on accuracy. Dictation keeps its own decoder and profile.
-            try await transcriber.prepare(profile: .accurate) { _ in }
+            prepareForMeetings()
+            try await modelPreparation.ensureLiveReady()
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled, session?.noteID == noteID else { return }
             fail("The local speech model could not load: \(error.localizedDescription)", noteID: noteID)
             return
         }
-        guard session?.noteID == noteID else { return }
+        guard !Task.isCancelled, session?.noteID == noteID else { return }
+        let recordingModel = modelSetup.recordingModel(preferred: activeSession.model)
+        session?.model = recordingModel
+        if recordingModel != activeSession.model {
+            if case .failed = modelSetup.cohere {
+                session?.modelWarning = "This recording uses Parakeet because Cohere couldn't prepare. You can retry setup after the recording."
+            } else {
+                session?.modelWarning = "This recording uses Parakeet while Cohere finishes setup. You can keep taking notes."
+            }
+        }
 
         let source = MeetingAudioSource()
-        let audio: AsyncStream<[Float]>
+        let audio: MeetingAudioStreams
         do {
             // The first tap creation blocks inside macOS's System Audio prompt
             // until the person answers it; keep the notepad responsive meanwhile.
@@ -238,8 +310,14 @@ final class MeetingNotesModel: ObservableObject {
             fail(error.localizedDescription, noteID: noteID)
             return
         }
+        guard !Task.isCancelled, session?.noteID == noteID else {
+            source.finish()
+            return
+        }
         self.source = source
+        session?.startedAt = .now
         session?.phase = .recording
+        preparationUpdate = nil
         if let error = source.systemAudioError {
             session?.systemAudioUnavailable = true
             systemAudioStatus = error.localizedDescription
@@ -247,49 +325,49 @@ final class MeetingNotesModel: ObservableObject {
             systemAudioStatus = "Capturing the other side of calls."
         }
 
-        // The emitter stops when the model rewrites already-shown words, which
-        // protects a document during dictation. A transcript just keeps going.
-        var finished = false
-        while !finished, !Task.isCancelled {
-            do {
-                _ = try await transcriber.transcribe(audio) { [weak self, weak source] update in
-                    guard let source else { return }
-                    let speaker = source.dominantSpeaker
-                    await self?.apply(update, speaker: speaker, to: noteID)
-                }
-                finished = true
-            } catch let error as LiveTranscriptError {
-                NSLog("Cadence Notes restarted transcription: %@", String(describing: error))
-                appendBreak(to: noteID)
-            } catch is SpeechEngineError {
-                finished = true
-            } catch {
-                fail(error.localizedDescription, noteID: noteID)
-                return
+        do {
+            try await transcriber.transcribe(audio, model: recordingModel, onFinishing: { [weak self] in
+                await self?.markFinishing(noteID: noteID)
+            }, onFallback: { [weak self] in
+                await self?.markModelFallback(noteID: noteID)
+            }) { [weak self] update in
+                await self?.apply(update, to: noteID)
             }
+        } catch is CancellationError {
+            source.finish()
+            return
+        } catch {
+            fail(error.localizedDescription, noteID: noteID)
+            return
         }
         finish(noteID: noteID)
     }
 
-    private func apply(_ update: LiveTranscriptUpdate, speaker: MeetingSpeaker, to noteID: UUID) {
-        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
-        notes[index].append(update.insertion, deleteBackward: update.deleteBackward, speaker: speaker)
+    private func markFinishing(noteID: UUID) {
+        guard session?.noteID == noteID, session?.phase == .recording else { return }
+        if let index = notes.firstIndex(where: { $0.id == noteID }), let session {
+            notes[index].duration = Date().timeIntervalSince(session.startedAt)
+        }
+        session?.phase = .finishing
+        audioLevel = 0
     }
 
-    /// A restarted decoder cannot continue the previous line's spelling, so
-    /// force the next words onto a fresh line.
-    private func appendBreak(to noteID: UUID) {
-        guard let index = notes.firstIndex(where: { $0.id == noteID }),
-              let last = notes[index].lines.indices.last else { return }
-        notes[index].lines[last].text = notes[index].lines[last].text.trimmingCharacters(in: .whitespaces)
-        if !notes[index].lines[last].text.hasSuffix(".") { notes[index].lines[last].text += " …" }
+    private func markModelFallback(noteID: UUID) {
+        guard session?.noteID == noteID else { return }
+        session?.modelWarning = "Some phrases kept their Parakeet transcript because Cohere could not finish them."
+    }
+
+    private func apply(_ update: MeetingTranscriptUpdate, to noteID: UUID) {
+        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        notes[index].apply(update)
     }
 
     private func finish(noteID: UUID) {
+        guard session?.noteID == noteID else { return }
         source = nil
         transcriptionTask = nil
         audioLevel = 0
-        if let index = notes.firstIndex(where: { $0.id == noteID }), let session {
+        if let index = notes.firstIndex(where: { $0.id == noteID }), let session, session.phase == .recording {
             notes[index].duration = Date().timeIntervalSince(session.startedAt)
         }
         if session?.noteID == noteID { session?.phase = .finished }
@@ -297,6 +375,7 @@ final class MeetingNotesModel: ObservableObject {
     }
 
     private func fail(_ message: String, noteID: UUID) {
+        guard session?.noteID == noteID else { return }
         source?.finish()
         source = nil
         transcriptionTask = nil

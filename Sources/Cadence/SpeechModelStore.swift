@@ -25,7 +25,7 @@ struct SpeechModelArtifact: Equatable, Sendable {
     let isCompiledModel: Bool
 }
 
-/// Keeps every model Cadence can select outside the application bundle. Sparkle
+/// Keeps the dictation models outside the application bundle. Sparkle
 /// replaces `Cadence.app` during an update, while Application Support remains
 /// in place, so a complete model set is downloaded only once per user account.
 struct SpeechModelStore: Sendable {
@@ -96,6 +96,12 @@ struct SpeechModelStore: Sendable {
     func installAll(
         onProgress: @escaping @Sendable (Double?) -> Void
     ) async throws {
+        try await SpeechModelInstaller.shared.install(store: self, onProgress: onProgress)
+    }
+
+    fileprivate func installMissingModels(
+        onProgress: @escaping @Sendable (Double?) -> Void
+    ) async throws {
         let parakeetArtifacts = requiredArtifacts.filter {
             $0.relativePath.hasPrefix("\(Repo.parakeetUnified.folderName)/")
         }
@@ -145,7 +151,7 @@ struct SpeechModelStore: Sendable {
         }
     }
 
-    private func artifactsAreInstalled(
+    func artifactsAreInstalled(
         _ artifacts: [SpeechModelArtifact],
         fileManager: FileManager = .default
     ) -> Bool {
@@ -179,7 +185,7 @@ struct SpeechModelStore: Sendable {
         return false
     }
 
-    private static func aggregate(
+    static func aggregate(
         _ progress: DownloadProgress,
         base: Double,
         weight: Double
@@ -196,5 +202,31 @@ struct SpeechModelStore: Sendable {
         case .compiling:
             return min(base + weight, 1)
         }
+    }
+}
+
+/// Launch-time dictation setup and meeting setup can reach the same files.
+/// Share the installation instead of racing two writers on partial downloads.
+private actor SpeechModelInstaller {
+    static let shared = SpeechModelInstaller()
+    private struct Installation {
+        let id: UUID
+        let task: Task<Void, Error>
+    }
+    private var installations: [URL: Installation] = [:]
+
+    func install(store: SpeechModelStore, onProgress: @escaping @Sendable (Double?) -> Void) async throws {
+        let key = store.modelsDirectory.standardizedFileURL
+        if let installation = installations[key] {
+            try await installation.task.value
+            return
+        }
+        let id = UUID()
+        let task = Task { try await store.installMissingModels(onProgress: onProgress) }
+        installations[key] = Installation(id: id, task: task)
+        defer {
+            if installations[key]?.id == id { installations.removeValue(forKey: key) }
+        }
+        try await task.value
     }
 }

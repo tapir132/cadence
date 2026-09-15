@@ -96,6 +96,8 @@ struct SettingsView: View {
 
                 sectionTitle("Notes").padding(.top, 34)
                 VStack(spacing: 0) {
+                    MeetingModelPicker().padding(16)
+                    line
                     HStack(spacing: 18) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Offer to take notes when a call starts").font(.system(size: 13, weight: .semibold))
