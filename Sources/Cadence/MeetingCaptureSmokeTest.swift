@@ -66,14 +66,21 @@ enum MeetingCaptureSmokeTest {
     private static func inspect(_ audio: AsyncStream<CapturedAudioChunk>) async -> (samples: Int, valid: Bool) {
         var count = 0
         var previous = -Double.infinity
+        var previousEnd: TimeInterval?
+        var maximumGap: TimeInterval = 0
+        var backwards = 0
         var valid = true
         for await chunk in audio {
+            if let previousEnd { maximumGap = max(maximumGap, abs(chunk.startTime - previousEnd)) }
+            if chunk.startTime < previous { backwards += 1 }
             count += chunk.samples.count
             let now = ProcessInfo.processInfo.systemUptime
             valid = valid && chunk.startTime.isFinite && chunk.startTime >= previous
                 && abs(now - chunk.startTime) < 5 && chunk.samples.allSatisfy(\.isFinite)
             previous = chunk.startTime
+            previousEnd = chunk.startTime + Double(chunk.samples.count) / 16_000
         }
+        print("capture timeline: maximum gap=\(maximumGap), backwards=\(backwards)")
         return (count, valid)
     }
 }

@@ -14,6 +14,17 @@ enum ReleaseSmokeTestGate {
     }
 }
 
+enum MeetingSpeakerSmokeTestGate {
+    static let keywords = ["dashboard", "escalation", "pineapple"]
+
+    static func passes(_ note: MeetingNote?) -> Bool {
+        guard let note else { return false }
+        let remote = note.lines.filter { $0.speaker == .them }.map(\.text).joined(separator: " ").lowercased()
+        return note.lines.allSatisfy { $0.speaker == .them }
+            && keywords.allSatisfy { remote.contains($0) }
+    }
+}
+
 @main
 struct CadenceApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -250,10 +261,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if notesSmokeTest { Task { @MainActor in await Self.runNotesSmokeTest() } }
     }
 
-    /// Starts notes, plays both sides of a short exchange through the Mac's
-    /// speakers, stops, and prints the saved lines. Exit status 0 means the
-    /// system-audio tap and local decoders produced both phrases. Playback
-    /// through speakers alone does not verify local/remote speaker separation.
+    /// Starts notes, plays three remote phrases through the Mac's
+    /// speakers and stops. All synthesized words arrive through playback, so
+    /// recognizing them as You is a failure. Uses an isolated note store.
     private static func runNotesSmokeTest() async {
         let meetings = MeetingNotesModel.shared
         meetings.startRecording(title: "Smoke test call")
@@ -270,17 +280,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await speak("Can everyone see the dashboard?")
         try? await Task.sleep(for: .seconds(2))
         await speak("Yes, I will route the escalation after this call.")
+        try? await Task.sleep(for: .seconds(2))
+        await speak("The final word is pineapple.")
         try? await Task.sleep(for: .milliseconds(1_500))
         meetings.stopRecording()
         let stopDeadline = ContinuousClock.now.advanced(by: .seconds(30))
         while meetings.session?.phase != .finished, ContinuousClock.now < stopDeadline {
             try? await Task.sleep(for: .milliseconds(100))
         }
+        guard meetings.session?.phase == .finished, meetings.session?.error == nil else {
+            print("smoke: notes did not finish successfully")
+            exit(1)
+        }
         let note = meetings.currentNote
-        for line in note?.lines ?? [] { print("smoke: \(line.speaker.title): \(line.text)") }
+        for keyword in MeetingSpeakerSmokeTestGate.keywords {
+            let speakers = note?.lines.filter { $0.text.lowercased().contains(keyword) }.map(\.speaker.title) ?? []
+            print("smoke: \(keyword) speakers=\(speakers)")
+        }
         print("smoke: duration: \(note?.duration ?? 0)")
-        let text = (note?.lines.map(\.text).joined(separator: " ") ?? "").lowercased()
-        exit(text.contains("dashboard") && text.contains("escalation") ? 0 : 1)
+        exit(MeetingSpeakerSmokeTestGate.passes(note) ? 0 : 1)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

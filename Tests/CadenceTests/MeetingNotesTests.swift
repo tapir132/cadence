@@ -2,6 +2,17 @@ import Foundation
 import Testing
 @testable import Cadence
 
+@Test func playbackSmokeTestRejectsWordsAssignedToBothSpeakers() {
+    var note = MeetingNote(id: UUID(), date: .now, title: "Test", duration: 0, lines: [], thoughts: "")
+    for keyword in MeetingSpeakerSmokeTestGate.keywords {
+        note.apply(MeetingTranscriptUpdate(id: UUID(), speaker: .them, startTime: 1, text: keyword))
+    }
+    #expect(MeetingSpeakerSmokeTestGate.passes(note))
+    note.apply(MeetingTranscriptUpdate(id: UUID(), speaker: .you, startTime: 2, text: "the escalation"))
+    #expect(!MeetingSpeakerSmokeTestGate.passes(note))
+    #expect(!MeetingSpeakerSmokeTestGate.passes(nil))
+}
+
 /// Previously, delayed words used the current mixer energy and split a
 /// remote sentence into Them/You. Now the originating turn owns every revision.
 @Test func delayedRemoteWordsDoNotSwitchToTheMicrophoneSpeaker() {

@@ -23,21 +23,42 @@ restarting recognition after a visible-text revision. Conversation words such
 as “new line” and “period” are not treated as dictation commands.
 
 Speaker playback also reaches a laptop microphone acoustically. Independent
-recognizers alone therefore produce duplicate You/Them lines. The microphone
-now passes through SpeexDSP's adaptive echo canceller using the system tap as
-its playback reference before VAD, either recognizer, or the local level meter.
+recognizers alone therefore produce duplicate You/Them lines. Meeting capture
+enables macOS voice processing on its microphone engine, with automatic gain
+control disabled so it cannot amplify residual echo. The existing SpeexDSP
+stage also uses the system tap as its playback reference before VAD, either
+recognizer, or the local level meter. Ordinary dictation uses its existing
+microphone engine without voice processing.
 The system transcript remains unchanged. This is signal processing, not deletion
 of matching words: the local speaker may intentionally repeat a remote phrase.
+
+A later live speaker test reproduced complete playback phrases under both
+**You** and **Them** despite the adaptive canceller. Several defects were involved:
+converted chunks inherited each input buffer's timestamp even when the
+converter retained samples or produced fractional frame counts, and the
+canceller's residual echo was still recognizable as speech. On the affected
+Mac, almost half the microphone frames had no usable playback reference before
+the timing correction. Converter output now uses its cumulative sample count
+relative to the hardware clock, preserving real device gaps and clock drift.
+The software canceller alone still leaked complete speech on real speakers,
+including during startup. Native voice processing passed the live playback
+check after correcting another routing defect: an aggregate can expose its
+output device's hardware input streams before the process tap. Those streams
+are now skipped, and playback buffers are mixed using their own channel counts
+instead of assuming the tap format describes the entire aggregate. This also
+handles interleaved stereo and separate channel buffers. Missing tap buffers
+never fall back to a hardware microphone.
 
 The 16 kHz mono canceller processes 256-sample frames with a 200 ms adaptive
 tail. Capture timestamps align the streams; 32 ms of reference look-ahead
 allows for different converter delays. Each microphone chunk may wait at most
 200 ms for missing reference, then passes through. Playback history is bounded
 to two seconds. Capture discontinuities reset adaptation, and stopping drains
-the final partial frame. Processing runs off capture callbacks and neither
-changes the output device nor ducks other apps. No additional model or audio
-file is needed. Clock alignment, adaptation during real speech, and nonlinear
-speaker distortion still require checks on actual devices.
+the final partial frame. Processing runs off capture callbacks. Native voice
+processing uses advanced ducking at the minimum level; macOS can briefly lower
+other playback while local speech is active. No additional model or audio file
+is needed. Other devices and real local/remote overlap still require their own
+live checks.
 
 A separate Bluetooth capture failure was reproduced with the unchanged audio
 engine: `start()` succeeded, a configuration change stopped the engine, and no
@@ -69,6 +90,11 @@ notification after an intentional stop must not reopen the microphone.
   specifies the explicit microphone/playback reference API and its timing,
   sample-clock, and acoustic-path requirements. The vendored sources are pinned
   to SpeexDSP 1.2.1; provenance and licenses are in `Sources/CSpeexDSP`.
+- [Wispr: How to know who said what in a meeting](https://wisprflow.ai/notetaker/how-to-know-who-said-what-in-a-meeting)
+  documents live **You**/**Them** labels, followed by a final speaker pass using
+  meeting and conversation context. Its public documentation does not disclose
+  the capture or echo-cancellation implementation. Cadence's local source
+  separation addresses the live labels; naming individual people is separate.
 - [Apple: AVAudioEngine configuration changes](https://developer.apple.com/documentation/avfaudio/avaudioengineconfigurationchangenotification)
   specifies that hardware sample-rate or channel-count changes stop and
   uninitialize the engine. A successful start is insufficient evidence that
@@ -107,6 +133,13 @@ or successful echo cancellation in a real room. Live capture, startup timings,
 and the visible readiness UI must be checked separately when device testing is
 permitted.
 
+`ResampledAudioClockTests` also covers converter priming, 44.1/48 kHz fractional
+output counts, and real capture gaps. `MeetingAudioBufferTests` covers duplex
+hardware input exclusion and both playback channel layouts. The opt-in speech
+suite checks quiet independent input channels and overlap using production ASR;
+the signed-bundle speaker check below exercises the native echo processing on
+the actual device.
+
 ### Cohere Beta
 
 Notes and Settings share a persisted model selector. Cohere Transcribe is the
@@ -123,6 +156,12 @@ empty output, decode errors, or a saturated token budget preserve the live
 words and show a fallback notice. Audio exists only in these bounded in-memory
 buffers. Stop closes capture immediately, drains both sources and the refinement
 queue, then saves; inference time is excluded from the meeting duration.
+
+A simulated overlap check preserved the expected live **You**/**Them** labels,
+but Cohere refinement built a backlog and did not finish within 60 seconds of
+stopping. That finalization delay remains unresolved in this Edge build. The
+live Parakeet text is retained; selecting Parakeet omits the refinement queue.
+Actual human microphone speech during overlap still requires a live-call check.
 
 Use `CoherePipeline` with `.cpuAndNeuralEngine`. In a minimal M2 Max experiment,
 `.all` spent roughly 113 seconds compiling the encoder's Metal execution graph
@@ -150,6 +189,7 @@ CADENCE_RUN_MEETING_MODEL_TEST=1 CADENCE_RUN_STREAMING_MODEL_TEST=1 \
 ./scripts/build-app.sh
 codesign --verify --deep --strict --verbose=2 dist/Cadence.app
 CADENCE_SMOKE_TEST=notes-capture dist/Cadence.app/Contents/MacOS/Cadence
+CADENCE_SMOKE_TEST=notes dist/Cadence.app/Contents/MacOS/Cadence
 ```
 
 The model test synthesizes temporary speech files locally and exercises quiet
@@ -167,6 +207,13 @@ that a late notification after intentional stop leaves the microphone closed. It
 play, transcribe, or save audio. It requires the app's existing audio grants.
 Set `CADENCE_NOTES_MICROPHONE_ONLY=1` to check the unavailable-system fallback.
 This capture check does not prove speech recognition or speaker accuracy.
+
+The `notes` check opens the real notepad with an isolated temporary note store,
+plays three known phrases through the Mac's output, and checks their finished
+speaker labels. It fails on **any You line**, including a mangled echo, and on
+missing remote phrases. The old version checked only whether the words existed
+and incorrectly passed duplicated **You**/**Them** transcripts. This check needs
+a quiet local microphone; it does not verify a real person's overlapping voice.
 
 ## Live-call checks and limits
 

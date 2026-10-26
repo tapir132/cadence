@@ -106,7 +106,15 @@ struct MeetingSession: Equatable {
 /// to take notes, and transcribes both sides of the call locally.
 @MainActor
 final class MeetingNotesModel: ObservableObject {
-    static let shared = MeetingNotesModel()
+    static let shared: MeetingNotesModel = {
+        if ProcessInfo.processInfo.environment["CADENCE_SMOKE_TEST"] == "notes" {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("cadence-notes-smoke-\(ProcessInfo.processInfo.processIdentifier)")
+                .appendingPathComponent("meetings.json")
+            return MeetingNotesModel(store: MeetingNoteStore(fileURL: file), polls: false)
+        }
+        return MeetingNotesModel()
+    }()
 
     @Published private(set) var detectedCall: DetectedCall?
     @Published private(set) var session: MeetingSession?

@@ -489,11 +489,13 @@ final class AudioCaptureEngine: @unchecked Sendable {
     private static let sampleRate = 16_000.0
 
     private let audioEngine: AVAudioEngine
+    private let voiceProcessing: Bool
     private let controlQueue = DispatchQueue(label: "app.cadence.microphone-control")
     private var configurationObserver: NSObjectProtocol?
     private var converter: AVAudioConverter?
     private var converterInputFormat: AVAudioFormat?
     private var manuallyMixInputToMono = false
+    private var resampledClock = ResampledAudioClock()
     private var recordingGeneration: UInt64 = 0
     private var isRecording = false
     private let lock = NSLock()
@@ -501,8 +503,9 @@ final class AudioCaptureEngine: @unchecked Sendable {
     private var continuation: AsyncStream<[Float]>.Continuation?
     private var timestampedContinuation: AsyncStream<CapturedAudioChunk>.Continuation?
 
-    init(audioEngine: AVAudioEngine = AVAudioEngine()) {
+    init(audioEngine: AVAudioEngine = AVAudioEngine(), voiceProcessing: Bool = false) {
         self.audioEngine = audioEngine
+        self.voiceProcessing = voiceProcessing
     }
 
     deinit {
@@ -544,6 +547,15 @@ final class AudioCaptureEngine: @unchecked Sendable {
         defer { if !started { stopCapture() } }
         observeConfigurationChanges()
         let input = audioEngine.inputNode
+        if voiceProcessing {
+            if !input.isVoiceProcessingEnabled { try input.setVoiceProcessingEnabled(true) }
+            // macOS accounts for the real speaker/microphone acoustic path,
+            // including other apps' playback. Keep AGC from amplifying residue.
+            input.isVoiceProcessingAGCEnabled = false
+            input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                enableAdvancedDucking: true, duckingLevel: .min
+            )
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0,
               let targetFormat = AVAudioFormat(
@@ -562,6 +574,7 @@ final class AudioCaptureEngine: @unchecked Sendable {
         lock.lock()
         recordingGeneration &+= 1
         self.converter = converter
+        resampledClock = ResampledAudioClock()
         converterInputFormat = sourceFormat
         manuallyMixInputToMono = mixToMono
         self.onLevel = onLevel
@@ -668,7 +681,6 @@ final class AudioCaptureEngine: @unchecked Sendable {
         guard status != .error, let channel = output.floatChannelData?.pointee else { return }
 
         let frameCount = Int(output.frameLength)
-        guard frameCount > 0 else { return }
         let converted = Array(UnsafeBufferPointer(start: channel, count: frameCount))
         let level = Self.normalizedLevel(converted)
 
@@ -680,11 +692,16 @@ final class AudioCaptureEngine: @unchecked Sendable {
         let levelHandler = onLevel
         let activeContinuation = continuation
         let activeTimestampedContinuation = timestampedContinuation
-        lock.unlock()
-        activeContinuation?.yield(converted)
-        let startTime = time.isHostTimeValid
+        let hardwareTime = time.isHostTimeValid
             ? AVAudioTime.seconds(forHostTime: time.hostTime)
-            : ProcessInfo.processInfo.systemUptime - Double(frameCount) / Self.sampleRate
+            : ProcessInfo.processInfo.systemUptime - Double(converterInput.frameLength) / converterInput.format.sampleRate
+        let startTime = resampledClock.startTime(
+            inputTime: hardwareTime, inputCount: Int(converterInput.frameLength),
+            inputRate: converterInput.format.sampleRate, outputCount: frameCount
+        )
+        lock.unlock()
+        guard frameCount > 0 else { return }
+        activeContinuation?.yield(converted)
         activeTimestampedContinuation?.yield(CapturedAudioChunk(samples: converted, startTime: startTime))
         levelHandler?(level)
     }

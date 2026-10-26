@@ -190,6 +190,21 @@ final class SystemAudioTap: @unchecked Sendable {
             throw SystemAudioTapError.status("creating the aggregate device", status)
         }
 
+        // A duplex output device (including VoiceProcessingIO's aggregate)
+        // contributes hardware microphone streams before the process tap.
+        // Those buffers must never enter the remote transcript/reference.
+        var inputStreamsAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams, mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var inputStreamsSize: UInt32 = 0
+        status = AudioObjectGetPropertyDataSize(outputDevice, &inputStreamsAddress, 0, nil, &inputStreamsSize)
+        guard status == noErr else {
+            stop()
+            throw SystemAudioTapError.status("locating the playback streams", status)
+        }
+        let hardwareInputStreams = Int(inputStreamsSize) / MemoryLayout<AudioStreamID>.size
+
         guard let monoFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: tapFormat.sampleRate, channels: 1, interleaved: false
         ), let targetFormat = AVAudioFormat(
@@ -198,33 +213,17 @@ final class SystemAudioTap: @unchecked Sendable {
             stop()
             throw SpeechEngineError.noInput
         }
-        let channels = Int(tapFormat.channelCount)
-        let interleaved = tapFormat.isInterleaved
+        let clock = ResampledAudioClock()
 
         status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, input, inputTime, _, _ in
             let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
-            guard let first = buffers.first, let data = first.mData else { return }
-            let frames = Int(first.mDataByteSize) / MemoryLayout<Float>.size / (interleaved ? max(channels, 1) : 1)
+            guard let monoSamples = Self.monoPlayback(from: Array(buffers), skipping: hardwareInputStreams) else { return }
+            let frames = monoSamples.count
             guard frames > 0, let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: AVAudioFrameCount(frames)),
                   let out = mono.floatChannelData?.pointee else { return }
             mono.frameLength = AVAudioFrameCount(frames)
-            if interleaved {
-                let source = data.assumingMemoryBound(to: Float.self)
-                for frame in 0..<frames {
-                    var sum: Float = 0
-                    for channel in 0..<channels { sum += source[frame * channels + channel] }
-                    out[frame] = sum / Float(channels)
-                }
-            } else {
-                // Non-interleaved taps deliver one buffer per channel; average them.
-                for frame in 0..<frames { out[frame] = 0 }
-                var counted = 0
-                for buffer in buffers {
-                    guard let channelData = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                    counted += 1
-                    for frame in 0..<frames { out[frame] += channelData[frame] }
-                }
-                for frame in 0..<frames { out[frame] /= Float(max(counted, 1)) }
+            monoSamples.withUnsafeBufferPointer { source in
+                if let base = source.baseAddress { out.update(from: base, count: frames) }
             }
 
             let ratio = targetFormat.sampleRate / monoFormat.sampleRate
@@ -235,12 +234,17 @@ final class SystemAudioTap: @unchecked Sendable {
             let result = converter.convert(to: output, error: &error) { _, inputStatus in
                 provider.provide(outStatus: inputStatus)
             }
-            guard result != .error, let channel = output.floatChannelData?.pointee, output.frameLength > 0 else { return }
-            let samples = Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength)))
+            guard result != .error, let channel = output.floatChannelData?.pointee else { return }
             let timestamp = inputTime.pointee
-            let startTime = timestamp.mFlags.contains(.hostTimeValid)
+            let hardwareTime = timestamp.mFlags.contains(.hostTimeValid)
                 ? AVAudioTime.seconds(forHostTime: timestamp.mHostTime)
-                : ProcessInfo.processInfo.systemUptime - Double(samples.count) / 16_000
+                : ProcessInfo.processInfo.systemUptime - Double(frames) / monoFormat.sampleRate
+            let startTime = clock.startTime(
+                inputTime: hardwareTime, inputCount: frames, inputRate: monoFormat.sampleRate,
+                outputCount: Int(output.frameLength)
+            )
+            guard output.frameLength > 0 else { return }
+            let samples = Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength)))
             onSamples(CapturedAudioChunk(samples: samples, startTime: startTime))
         }
         guard status == noErr else {
@@ -252,6 +256,25 @@ final class SystemAudioTap: @unchecked Sendable {
             stop()
             throw SystemAudioTapError.status("starting capture", status)
         }
+    }
+
+    /// IOProc buffers describe their own channel layout. A tap's format need
+    /// not match the aggregate's hardware buffers or interleaving.
+    static func monoPlayback(from buffers: [AudioBuffer], skipping hardwareInputs: Int) -> [Float]? {
+        let playback = buffers.dropFirst(hardwareInputs)
+        guard !playback.isEmpty, playback.allSatisfy({ $0.mData != nil && $0.mNumberChannels > 0 }),
+              let frames = playback.map({ Int($0.mDataByteSize) / MemoryLayout<Float>.size / Int($0.mNumberChannels) }).min(),
+              frames > 0 else { return nil }
+        let channels = playback.reduce(0) { $0 + Int($1.mNumberChannels) }
+        var mono = [Float](repeating: 0, count: frames)
+        for buffer in playback {
+            let source = buffer.mData!.assumingMemoryBound(to: Float.self)
+            let count = Int(buffer.mNumberChannels)
+            for frame in 0..<frames {
+                for channel in 0..<count { mono[frame] += source[frame * count + channel] / Float(channels) }
+            }
+        }
+        return mono
     }
 
     func stop() {
@@ -281,7 +304,7 @@ struct MeetingAudioStreams: Sendable {
 }
 
 final class MeetingAudioSource: @unchecked Sendable {
-    private let microphone = AudioCaptureEngine()
+    private let microphone = AudioCaptureEngine(voiceProcessing: true)
     private let tap = SystemAudioTap()
     private var systemContinuation: AsyncStream<CapturedAudioChunk>.Continuation?
     private var microphoneForwarder: Task<Void, Never>?
